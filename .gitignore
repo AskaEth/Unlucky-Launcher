@@ -5,6 +5,10 @@
 # Local development docs
 /DevDocs/
 
+# Local acceptance screenshots (screenshot channel output, never committed)
+/.screens/
+/.tmp-screens/
+
 # Agent workspace (local-only)
 /.tower/
 

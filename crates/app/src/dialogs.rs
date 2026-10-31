@@ -4,11 +4,13 @@
 //! 当前条被确认/取消后由 [`DialogQueue::advance`] 推进到下一条，UI 只渲染 `current`。
 //! 非阻塞提示走 [`crate::toast`]，不占模态队列。
 
+use serde::{Deserialize, Serialize};
+
 /// 对话框标识。
 pub type DialogId = u64;
 
 /// 对话框来源：决定插队优先级。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DialogSource {
     /// 提示类（教程、首次使用说明）
     Hint = 0,
@@ -26,7 +28,7 @@ impl DialogSource {
 }
 
 /// 对话框类型（09 §3：确认 / 进度 / 输入 / 错误）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DialogKind {
     /// 确认：主按钮 + 次按钮
     Confirm {
@@ -87,7 +89,7 @@ impl DialogKind {
 }
 
 /// 一条对话框请求。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DialogRequest {
     /// 队列内唯一 id（由 [`DialogQueue::push_request`] 重新编号）
     pub id: DialogId,

@@ -32,36 +32,40 @@
 #![allow(missing_docs, dead_code)]
 
 mod appearance_bind;
+mod backend;
 mod bg_image;
 mod callbacks;
+mod callbacks_pages;
 mod conv;
 mod dialogs;
 mod dto;
+mod host;
 mod mock;
 mod mock_data;
+mod page_sync;
 mod png;
 mod prefs;
 mod router;
+mod screenshot;
 mod settings_bridge;
 mod state;
 mod theme_runtime;
 mod toast;
 mod ui_bind;
+mod wizard;
 
 slint::include_modules!();
 
 fn main() -> Result<(), slint::PlatformError> {
     apply_renderer_flag();
 
-    let app = ui_bind::AppUi::new(MainWindow::new()?);
+    let app = ui_bind::AppUi::with_options(MainWindow::new()?, screenshot::app_options());
 
     // 截图验收通道（M41 视觉验收；无交互桌面/无 GPU 环境下的唯一可靠取图方式：
     // 不截屏幕，而是让 Slint 把当前场景渲染进内存像素缓冲再自己编码 PNG）。
-    if let Some(path) = screenshot_path() {
-        if std::env::args().any(|arg| arg == "--screenshot-settings") {
-            app.open_settings_appearance();
-        }
-        app.render_screenshot(&path)?;
+    // P3 追加页面选择与中间态（安装进度 / 启动事件流），见 `crate::screenshot`。
+    if let Some(options) = screenshot::shot_options() {
+        screenshot::capture(&app, &options)?;
         return Ok(());
     }
 
@@ -77,18 +81,4 @@ fn apply_renderer_flag() {
     if software {
         std::env::set_var("SLINT_BACKEND", "winit-software");
     }
-}
-
-/// `--screenshot <path>` / `--screenshot=<path>`：渲染一帧并写 PNG 后退出。
-fn screenshot_path() -> Option<String> {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        if let Some(value) = arg.strip_prefix("--screenshot=") {
-            return Some(value.to_owned());
-        }
-        if arg == "--screenshot" {
-            return args.next();
-        }
-    }
-    None
 }

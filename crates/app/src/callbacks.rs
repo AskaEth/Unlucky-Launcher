@@ -180,10 +180,8 @@ fn wire_instances(ui: &crate::MainWindow, weak: &Weak<Inner>) {
         let weak = weak.clone();
         ui.on_new_instance(move || {
             let Some(this) = weak.upgrade() else { return };
-            this.state
-                .borrow_mut()
-                .toasts
-                .push(ToastKind::Info, "新建实例向导（G5）在 P1 落地");
+            // G5：打开向导（版本 → 加载器 → 名字 → 确认 → 安装进度）
+            this.state.borrow_mut().wizard = crate::wizard::WizardState::open();
             this.sync();
         });
     }

@@ -216,3 +216,149 @@ export struct UiToast {
     kind: ToastKind,
     text: string,
 }
+
+// ── P3 全量接线的视图模型（账户 / Java / 安装 / 设置分组 / 通知 / 向导）──────────
+// 这些类型由 Rust 的 dto 单向转换（`conv/pages.rs`），Slint 只读不写业务真相。
+// 全部经 `page_state.slint` 的 `PageState` global 下发（避免 main/shell 的属性转发膨胀）。
+
+export enum AccountKind {
+    offline,
+    microsoft,
+    authlib,
+}
+
+export struct UiAccount {
+    id: string,
+    name: string,
+    kind: AccountKind,
+    kind_label: string,
+    profile_id: string,
+    login_name: string,
+    created: string,
+    active: bool,
+}
+
+/// 设备码登录面板（用户码/链接不是凭据，可直接展示）。
+export struct UiDeviceCode {
+    visible: bool,
+    busy: bool,
+    user_code: string,
+    verification_uri: string,
+    qr_link: string,
+    expires: int,
+    message: string,
+    phase_label: string,
+}
+
+export enum JavaStepOutcome {
+    pending,
+    skip,
+    failed,
+    hit,
+}
+
+export struct UiJavaStep {
+    vendor: string,
+    outcome: JavaStepOutcome,
+    outcome_label: string,
+    detail: string,
+}
+
+export struct UiJavaVendor {
+    id: string,
+    display: string,
+    rank: int,
+    majors: string,
+    sources: string,
+    installed: bool,
+}
+
+export struct UiJavaRuntime {
+    binary: string,
+    version: string,
+    vendor: string,
+    origin: string,
+}
+
+export enum InstallStage {
+    planning,
+    downloading,
+    installing,
+    registering,
+    done,
+    failed,
+    cancelled,
+}
+
+export struct UiInstallProgress {
+    visible: bool,
+    version: string,
+    instance: string,
+    loader: string,
+    stage: InstallStage,
+    stage_label: string,
+    ratio: float,
+    known: bool,
+    files_label: string,
+    bytes_label: string,
+    speed: string,
+    eta: string,
+    message: string,
+    terminal: bool,
+    failed: bool,
+}
+
+export enum SettingControl {
+    toggle,
+    choice,
+    text,
+    readonly,
+    action,
+}
+
+export struct UiSettingRow {
+    key: string,
+    label: string,
+    description: string,
+    control: SettingControl,
+    flag: bool,
+    selected: int,
+    options: [string],
+    value_text: string,
+    action: string,
+}
+
+export struct UiSettingGroup {
+    id: string,
+    title: string,
+    rows: [UiSettingRow],
+}
+
+export enum NoticeKind {
+    info,
+    warn,
+    error,
+}
+
+export struct UiNotice {
+    id: string,
+    kind: NoticeKind,
+    title: string,
+    body: string,
+}
+
+export struct UiWizard {
+    open: bool,
+    step: int,
+    step_label: string,
+    step_index: int,
+    step_total: int,
+    version: string,
+    loader: int,
+    loader_label: string,
+    loader_version: string,
+    name: string,
+    error: string,
+    busy: bool,
+    can-next: bool,
+}

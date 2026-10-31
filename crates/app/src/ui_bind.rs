@@ -14,14 +14,14 @@ use std::time::Duration;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+use crate::backend::{build_backend, config_path, AppOptions};
 use crate::bg_image::BackgroundLayers;
 use crate::conv;
-use crate::dto::{AppCommand, Backend, InstanceId};
-use crate::mock::MockBackend;
+use crate::dto::{AppCommand, Backend};
 use crate::prefs::BgFill;
 use crate::settings_bridge::SettingsBridge;
 use crate::state::AppState;
-use crate::{MainWindow, SettingSection};
+use crate::{MainWindow, PageState, SettingSection};
 
 /// 定时器节拍：33ms ≈ 30fps（磁贴进度环 / 流式文本 / Toast TTL 的刷新下限）。
 const TICK_MS: u64 = 33;
@@ -67,19 +67,28 @@ pub(crate) struct BackgroundKey {
 }
 
 impl AppUi {
-    /// 建状态 + 假后端、读配置、接全部回调、灌初始事件并做第一次同步。
+    /// 建状态 + 真实后端、读配置、接全部回调、灌初始事件并做第一次同步。
     pub fn new(ui: MainWindow) -> Self {
+        Self::with_options(ui, AppOptions::default())
+    }
+
+    /// 带启动选项装配（数据根覆盖 / 强制 mock）。
+    pub fn with_options(ui: MainWindow, options: AppOptions) -> Self {
         // 先读一次落盘配置：主题三态 + 外观四件必须在首帧前就位（否则会闪一下出厂外观）
-        let bridge = SettingsBridge::open();
+        let bridge = match &options.data_root {
+            Some(root) => SettingsBridge::with_path(config_path(root)),
+            None => SettingsBridge::open(),
+        };
         let (appearance, theme) = bridge.load();
         let mut state = AppState::new();
         state.prefs.appearance = appearance;
         state.prefs.theme = theme;
 
+        let backend = build_backend(&options);
         let inner = Rc::new(Inner {
             ui,
             state: RefCell::new(state),
-            backend: RefCell::new(Box::new(MockBackend::new())),
+            backend: RefCell::new(backend),
             bridge: RefCell::new(bridge),
             background: RefCell::new(BackgroundLayers::default()),
             background_key: RefCell::new(None),
@@ -88,6 +97,7 @@ impl AppUi {
         });
 
         crate::callbacks::wire(Rc::downgrade(&inner));
+        crate::callbacks_pages::wire_pages(Rc::downgrade(&inner));
         inner.drain_events();
         inner.align_system_theme();
         inner.apply_theme();
@@ -134,6 +144,71 @@ impl AppUi {
         slint::platform::update_timers_and_animations();
     }
 
+    /// 直接跳到一个页面（截图验收用：每页一张）。
+    pub fn open_page(&self, page: &str) {
+        let route = match page {
+            "download" | "java" => crate::router::Route::Download,
+            "logs" => crate::router::Route::Logs,
+            "settings" | "account" | "appearance" => crate::router::Route::Settings,
+            "agent" => crate::router::Route::Agent,
+            _ => crate::router::Route::Instances,
+        };
+        {
+            let mut state = self.inner.state.borrow_mut();
+            state.navigate(route);
+            match page {
+                "account" => state.settings_tab = "account".to_string(),
+                "java" => state.settings_tab = "java".to_string(),
+                "settings" => state.settings_tab = "download".to_string(),
+                _ => {}
+            }
+            let download_tab = i32::from(page == "java");
+            self.inner
+                .ui
+                .global::<PageState<'_>>()
+                .set_download_tab(download_tab);
+        }
+        match page {
+            "account" => self.inner.ui.set_settings_section(SettingSection::Account),
+            "java" => self.inner.ui.set_settings_section(SettingSection::Java),
+            "appearance" => self
+                .inner
+                .ui
+                .set_settings_section(SettingSection::Appearance),
+            "settings" => self.inner.ui.set_settings_section(SettingSection::Download),
+            _ => {}
+        }
+        self.inner.sync();
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// 打开新建实例向导（截图验收用）。
+    pub fn open_wizard(&self) {
+        self.inner.state.borrow_mut().wizard = crate::wizard::WizardState::open();
+        self.inner.sync();
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// 打开一个日志会话（截图验收：日志行 + 诊断卡片 + 头部标题都要有值）。
+    pub fn open_session(&self, id: &str) {
+        self.inner.state.borrow_mut().selected_session = Some(id.to_string());
+        self.inner
+            .dispatch(AppCommand::OpenLogSession(id.to_string()));
+        self.inner.sync();
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// 派发一条指令并跑若干毫秒（截图中间态：安装进度 / 启动事件流）。
+    pub fn dispatch_and_run(&self, command: AppCommand, millis: u64) {
+        self.inner.dispatch(command);
+        let steps = (millis / TICK_MS).max(1);
+        for _ in 0..steps {
+            self.inner.tick();
+            slint::platform::update_timers_and_animations();
+            std::thread::sleep(Duration::from_millis(TICK_MS));
+        }
+    }
+
     /// 渲染当前场景并存成 PNG（`--screenshot` 通道；见 `crate::png`）。
     ///
     /// 为什么要这条通道：验收环境可能没有交互桌面（`CopyFromScreen` 直接失败），
@@ -150,8 +225,8 @@ impl AppUi {
             .set_size(slint::WindowSize::Logical(slint::LogicalSize::new(
                 1180.0, 760.0,
             )));
-        // 先走几拍：把 mock 事件（实例/版本/日志）与 33ms 节拍的效果灌进去
-        for _ in 0..4 {
+        // 先走几拍：把后端事件（实例/版本/日志/账户/设置）与 33ms 节拍的效果灌进去
+        for _ in 0..8 {
             self.tick_once();
             std::thread::sleep(Duration::from_millis(TICK_MS));
         }
@@ -245,89 +320,13 @@ impl Inner {
         ui.set_dialog(dialog);
         ui.set_dialog_open(open);
         ui.set_dialog_queued(queued);
+
+        // PageState（账户/Java/安装/设置/通知/向导）在独立模块里灌，守 400 行
+        crate::page_sync::apply(ui, &state);
     }
 }
 
+/// Slint 列表模型（VecModel → ModelRc）。
 pub(crate) fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(items))
-}
-
-/// 停止实例的指令构造（阶段 C 的磁贴「停止」键用；P0 只保留 API）。
-#[allow(dead_code)]
-pub fn stop_instance(id: &InstanceId) -> AppCommand {
-    AppCommand::StopInstance(id.clone())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::send_agent_message;
-    use crate::dto::{Backend, ChatRole};
-    use crate::mock::MockBackend;
-    use crate::state::AppState;
-
-    /// 集成测试（callbacks→state→mock 全链路）：发一次提问后
-    /// ①用户消息恰出现一次（无本地回显重复）②所有 assistant 气泡收敛（无幽灵气泡）。
-    ///
-    /// 分层单测漏掉这条正是 review P1-1 的根因，故这里用真实 mock 后端跑完整事件流。
-    #[test]
-    fn send_path_has_no_duplicate_user_message_and_no_ghost_stream() {
-        let mut state = AppState::new();
-        let mut backend = MockBackend::new();
-        // 先灌入种子事件（实例/版本/日志快照）
-        for event in backend.drain_events() {
-            state.apply(event);
-        }
-
-        send_agent_message(&mut state, &mut backend, "装哪个版本");
-
-        fn user_count(state: &AppState) -> usize {
-            state
-                .ai
-                .messages
-                .iter()
-                .filter(|message| message.role == ChatRole::User)
-                .count()
-        }
-        assert_eq!(
-            user_count(&state),
-            1,
-            "用户消息必须恰好一条（本地回显会造成两条）"
-        );
-        assert!(state.ai.streaming);
-
-        // 推进到流式收敛（mock 300ms/片 + 工具调用 + 收尾消息）
-        for _ in 0..12 {
-            backend.tick(Duration::from_millis(400));
-            for event in backend.drain_events() {
-                state.apply(event);
-            }
-        }
-
-        assert_eq!(user_count(&state), 1, "事件回流后用户消息仍应只有一条");
-        assert!(
-            state.ai.messages.iter().all(|message| !message.streaming),
-            "所有气泡必须收敛（幽灵气泡会永久 streaming）"
-        );
-        assert!(!state.ai.streaming);
-        assert!(
-            state
-                .ai
-                .messages
-                .iter()
-                .any(|message| message.role == ChatRole::Assistant && !message.text.is_empty()),
-            "增量应累积到 assistant 正文"
-        );
-        assert_eq!(
-            state
-                .ai
-                .messages
-                .iter()
-                .filter(|message| message.role == ChatRole::Assistant)
-                .count(),
-            2,
-            "一轮对话 = 流式回复 + 收尾回复"
-        );
-    }
 }

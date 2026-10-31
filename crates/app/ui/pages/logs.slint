@@ -8,6 +8,7 @@ import { AppIcon, IconKind } from "../components/icons.slint";
 import { Badge } from "../components/badge.slint";
 import { MetroButton, ButtonKind } from "../widgets/button.slint";
 import { SearchField } from "../widgets/inputs.slint";
+import { PageState } from "../page_state.slint";
 import { ListView } from "std-widgets.slint";
 
 component SessionRow inherits Rectangle {
@@ -106,6 +107,8 @@ export component LogsPage inherits Rectangle {
     callback ask-ai(string);
     callback apply-fix();
     callback query-changed(string);
+    /// 重新扫会话索引（手动刷新）
+    callback refresh();
 
     background: Theme.bg-canvas;
 
@@ -157,30 +160,57 @@ export component LogsPage inherits Rectangle {
         VerticalLayout {
             vertical-stretch: 1;
 
+            // 会话头：标题 + 实时标记 + 筛选 + 刷新（第一行），崩溃日志导入（第二行）
             Rectangle {
-                height: 44px;
+                height: 84px;
                 background: Theme.bg-surface;
 
-                HorizontalLayout {
-                    padding-left: Metrics.gap-3;
-                    padding-right: Metrics.gap-3;
-                    spacing: Metrics.gap-2;
+                VerticalLayout {
+                    HorizontalLayout {
+                        height: 44px;
+                        padding-left: Metrics.gap-3;
+                        padding-right: Metrics.gap-3;
+                        spacing: Metrics.gap-2;
 
-                    UiText {
-                        role: TextRole.bodyStrong;
-                        text: root.selected == "" ? "未选择会话" : root.selected;
-                        horizontal-stretch: 1;
+                        UiText {
+                            role: TextRole.bodyStrong;
+                            text: root.selected == "" ? "未选择会话" : root.selected;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        if root.live : Badge { text: "实时"; tint: Theme.state-success; }
+                        SearchField {
+                            width: 140px;
+                            placeholder: "筛选日志行";
+                            text <=> root.query;
+                            edited(t) => { root.query-changed(t); }
+                        }
+                        MetroButton {
+                            kind: ButtonKind.subtle;
+                            text: "刷新";
+                            button-height: 26px;
+                            clicked => { root.refresh(); }
+                        }
                     }
-                    SearchField {
-                        width: 200px;
-                        placeholder: "筛选日志行";
-                        text <=> root.query;
-                        edited(t) => { root.query-changed(t); }
-                    }
-                    MetroButton {
-                        kind: ButtonKind.subtle;
-                        text: "打开目录";
-                        button-height: 26px;
+
+                    // 崩溃日志导入分析（hs_err_pid*.log / crash-*.txt / latest.log）
+                    HorizontalLayout {
+                        height: 40px;
+                        padding-left: Metrics.gap-3;
+                        padding-right: Metrics.gap-3;
+                        spacing: Metrics.gap-2;
+                        SearchField {
+                            horizontal-stretch: 1;
+                            placeholder: "崩溃日志路径（如 .minecraft/crash-reports/crash-*.txt）";
+                            text <=> PageState.crash-path;
+                        }
+                        MetroButton {
+                            kind: ButtonKind.standard;
+                            text: "导入分析";
+                            button-height: 26px;
+                            enabled: PageState.crash-path != "";
+                            clicked => { PageState.crash-import(PageState.crash-path); }
+                        }
                     }
                 }
             }

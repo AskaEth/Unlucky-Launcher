@@ -22,6 +22,9 @@ pub fn mock_instances() -> Vec<InstanceSummary> {
             last_played: Some("2026-10-29T19:22:00Z".to_string()),
             runtime: InstanceRuntime::Idle,
             icon: None,
+            isolation: "isolated".to_string(),
+            version_id: "1.20.4".to_string(),
+            version_present: true,
         },
         InstanceSummary {
             id: "vanilla-latest".to_string(),
@@ -34,6 +37,9 @@ pub fn mock_instances() -> Vec<InstanceSummary> {
             last_played: Some("2026-10-28T21:03:00Z".to_string()),
             runtime: InstanceRuntime::Idle,
             icon: None,
+            isolation: "isolated".to_string(),
+            version_id: "1.21.9".to_string(),
+            version_present: true,
         },
         InstanceSummary {
             id: "ancient-1.7.10".to_string(),
@@ -46,6 +52,9 @@ pub fn mock_instances() -> Vec<InstanceSummary> {
             last_played: None,
             runtime: InstanceRuntime::Idle,
             icon: None,
+            isolation: "shared".to_string(),
+            version_id: "1.7.10".to_string(),
+            version_present: false,
         },
         InstanceSummary {
             id: "modded-dev".to_string(),
@@ -60,6 +69,9 @@ pub fn mock_instances() -> Vec<InstanceSummary> {
                 reason: "exit0 静默失败".to_string(),
             },
             icon: None,
+            isolation: "isolated".to_string(),
+            version_id: "1.21.1-neoforge-21.1.72".to_string(),
+            version_present: true,
         },
     ]
 }

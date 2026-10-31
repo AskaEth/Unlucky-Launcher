@@ -23,6 +23,9 @@ fn instance(id: &str, name: &str) -> InstanceSummary {
         last_played: None,
         runtime: InstanceRuntime::Idle,
         icon: None,
+        isolation: "isolated".to_string(),
+        version_id: "1.20.4".to_string(),
+        version_present: true,
     }
 }
 

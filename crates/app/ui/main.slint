@@ -9,6 +9,8 @@
 // 亮/暗双套色板（LightPalette/DarkPalette）、主题三态解析、排版 ramp 与字体栈；M11 的占位
 // NavItem/Tile 组件由 `components/nav.slint` 与 `components/tile.slint` 取代，占位内核不再保留。
 
+// P3：页面状态 global 从根文件再导出一遍，Rust 侧才能拿到 `PageState` 类型。
+export { PageState } from "page_state.slint";
 import { AppShell } from "shell.slint";
 import { Theme } from "theme/tokens.slint";
 import { Metrics } from "theme/metrics.slint";

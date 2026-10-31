@@ -3,11 +3,13 @@
 //! 与模态对话框队列（[`crate::dialogs`]）分开：Toast 不阻塞、不排序、可叠加，
 //! 只做「先进先出 + 上限裁剪 + TTL 到期」。UI 侧由 Rust 定时器每帧调用 [`ToastCenter::expire`]。
 
+use serde::{Deserialize, Serialize};
+
 /// Toast 标识。
 pub type ToastId = u64;
 
 /// Toast 语义色。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToastKind {
     /// 一般信息
     Info,
@@ -20,7 +22,7 @@ pub enum ToastKind {
 }
 
 /// 一条 Toast；`remaining_ms` 由 [`ToastCenter::expire`] 递减。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Toast {
     /// 队列内唯一 id（由 [`ToastCenter::push_request`] 重新编号）
     pub id: ToastId,

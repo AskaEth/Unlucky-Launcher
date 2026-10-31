@@ -1,0 +1,194 @@
+// 设置 → 账户（D9 / G6）：三轨账户列表 + 离线添加 + 微软设备码登录 + 删除/切换。
+//
+// 凭据红线：这里能看到的只有「名字 / 轨道 / 公开 UUID / 登录名 / 创建时间」——
+// token 与密码永远不进 UI（Rust 侧的 AccountView 不含这些字段）。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { AccountKind, UiAccount } from "../models.slint";
+import { PageState } from "../page_state.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { Badge } from "../components/badge.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+import { MetroButton, ButtonKind } from "../widgets/button.slint";
+import { SearchField } from "../widgets/inputs.slint";
+import { SettingGroup } from "../widgets/setting-item.slint";
+
+component AccountRow inherits Rectangle {
+    in property <UiAccount> data;
+    callback activate();
+    callback remove();
+
+    height: 56px;
+    background: root.data.active ? Theme.accent-soft : transparent;
+
+    if root.data.active : Rectangle {
+        x: 0;
+        y: 0;
+        width: 3px;
+        height: root.height;
+        background: Theme.accent;
+    }
+
+    HorizontalLayout {
+        padding-left: Metrics.gap-3;
+        padding-right: Metrics.gap-3;
+        spacing: Metrics.gap-2;
+
+        AppIcon {
+            icon-size: 16px;
+            kind: root.data.kind == AccountKind.offline ? IconKind.instances : IconKind.ai;
+            tint: root.data.active ? Theme.accent : Theme.fg-secondary;
+        }
+        VerticalLayout {
+            spacing: 0px;
+            vertical-stretch: 1;
+            UiText { role: TextRole.bodyStrong; text: root.data.name; horizontal-stretch: 1; }
+            UiText {
+                role: TextRole.caption;
+                text: root.data.profile_id + (root.data.login_name == "" ? "" : " · " + root.data.login_name);
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+        }
+        Badge { text: root.data.kind_label; tint: Theme.fg-secondary; }
+        UiText { role: TextRole.caption; text: root.data.created; width: 108px; }
+        if !root.data.active : MetroButton {
+            kind: ButtonKind.standard;
+            text: "用这个";
+            button-height: 24px;
+            clicked => { root.activate(); }
+        }
+        if root.data.active : Badge { text: "启动中"; tint: Theme.accent; }
+        MetroButton {
+            kind: ButtonKind.subtle;
+            text: "删除";
+            button-height: 24px;
+            clicked => { root.remove(); }
+        }
+    }
+}
+
+export component AccountSection inherits Rectangle {
+    background: transparent;
+
+    VerticalLayout {
+        // 设备码登录面板（Waiting 时显示用户码 + 链接；失败显示原因）
+        if PageState.device.visible : Rectangle {
+            height: PageState.device.busy ? 96px : 84px;
+            background: PageState.device.phase_label == "失败" ? Theme.state-danger-soft : Theme.accent-soft;
+
+            VerticalLayout {
+                padding: Metrics.gap-3;
+                spacing: Metrics.gap-1;
+
+                HorizontalLayout {
+                    spacing: Metrics.gap-2;
+                    AppIcon {
+                        icon-size: 16px;
+                        kind: PageState.device.phase_label == "失败" ? IconKind.error : IconKind.ai;
+                        tint: PageState.device.phase_label == "失败" ? Theme.state-danger : Theme.accent;
+                    }
+                    UiText {
+                        role: TextRole.bodyStrong;
+                        text: "微软登录 · " + PageState.device.phase_label;
+                        horizontal-stretch: 1;
+                    }
+                    if PageState.device.busy : MetroButton {
+                        kind: ButtonKind.subtle;
+                        text: "取消";
+                        button-height: 24px;
+                        clicked => { PageState.msa-cancel(); }
+                    }
+                    if !PageState.device.busy : MetroButton {
+                        kind: ButtonKind.subtle;
+                        text: "关闭";
+                        button-height: 24px;
+                        clicked => { PageState.msa-cancel(); }
+                    }
+                }
+
+                if PageState.device.user_code != "" : HorizontalLayout {
+                    spacing: Metrics.gap-3;
+                    UiText {
+                        role: TextRole.title;
+                        text: PageState.device.user_code;
+                        color: Theme.accent;
+                    }
+                    UiText {
+                        role: TextRole.caption;
+                        text: "在浏览器打开 " + PageState.device.verification_uri + " 输入上面的用户码";
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                }
+                UiText {
+                    role: TextRole.caption;
+                    text: PageState.device.message;
+                    horizontal-stretch: 1;
+                    wrap: word-wrap;
+                }
+                if PageState.device.qr_link != "" : UiText {
+                    role: TextRole.monoSmall;
+                    text: PageState.device.qr_link;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // 离线添加表单
+        SettingGroup { title: "添加离线账户"; }
+        HorizontalLayout {
+            padding-left: Metrics.gap-4;
+            padding-right: Metrics.gap-4;
+            spacing: Metrics.gap-2;
+            SearchField {
+                width: 220px;
+                text <=> PageState.offline-name;
+                placeholder: "玩家名（离线 UUID 自动生成）";
+            }
+            MetroButton {
+                kind: ButtonKind.accent;
+                text: "添加离线";
+                button-height: 28px;
+                enabled: PageState.offline-name != "";
+                clicked => { PageState.account-add-offline(PageState.offline-name); }
+            }
+            MetroButton {
+                kind: ButtonKind.standard;
+                text: "微软登录（设备码）";
+                button-height: 28px;
+                enabled: !PageState.device.busy;
+                clicked => { PageState.msa-begin(); }
+            }
+        }
+
+        // 账户列表
+        SettingGroup { title: "账户（" + PageState.accounts.length + "）"; }
+        if PageState.accounts.length == 0 : Rectangle {
+            height: 72px;
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                UiText {
+                    role: TextRole.caption;
+                    text: "还没有账户：启动时会用「Player」离线占位。";
+                    horizontal-alignment: center;
+                }
+            }
+        }
+        for account in PageState.accounts : AccountRow {
+            data: account;
+            activate => { PageState.account-switch(account.id); }
+            remove => { PageState.account-remove(account.id); }
+        }
+
+        UiText {
+            role: TextRole.caption;
+            x: Metrics.gap-4;
+            text: "凭据只存在 <数据根>/data/auth/（账号文件与凭据文件分离），界面与 AI 都拿不到 token。";
+            horizontal-stretch: 1;
+            wrap: word-wrap;
+        }
+    }
+}

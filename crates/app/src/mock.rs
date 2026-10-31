@@ -260,9 +260,9 @@ impl Backend for MockBackend {
                     crate::mock_data::mock_diagnosis(id),
                 )));
             }
-            AppCommand::RefreshInstances
-            | AppCommand::RefreshLogSessions
-            | AppCommand::StopAgent => {}
+            AppCommand::RefreshAll | AppCommand::RefreshLogSessions | AppCommand::StopAgent => {}
+            // 其余指令（安装向导/账户/Java/设置/通知）由真实 host 承接：mock 不模拟
+            _ => {}
         }
     }
 
