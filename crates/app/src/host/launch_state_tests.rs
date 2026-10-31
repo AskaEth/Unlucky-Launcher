@@ -12,8 +12,17 @@ use super::*;
 use crate::dto::{LaunchFinished, LogOutcome};
 use crate::toast::ToastKind;
 
-/// 建一个只有一条实例档案的数据根，返回 `(host, instance_id)`。
-fn host_with_instance(label: &str) -> (CoreHost, String) {
+/// 临时数据根守卫：测试结束（含断言 panic）时把目录删掉，不留空壳。
+struct TempRoot(std::path::PathBuf);
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// 建一个只有一条实例档案的数据根，返回 `(host, instance_id, 守卫)`。
+fn host_with_instance(label: &str) -> (CoreHost, String, TempRoot) {
     let dir = std::env::temp_dir().join(format!(
         "ull-host-launch-{label}-{}-{}",
         std::process::id(),
@@ -40,7 +49,7 @@ fn host_with_instance(label: &str) -> (CoreHost, String) {
         ..ProfileList::default()
     };
     write_profiles(&env.layout, &profiles).expect("写 profiles");
-    (CoreHost::headless(env), id)
+    (CoreHost::headless(env), id, TempRoot(dir))
 }
 
 fn live(instance: &str, session: &str, pid: u32) -> LiveLaunch {
@@ -53,7 +62,7 @@ fn live(instance: &str, session: &str, pid: u32) -> LiveLaunch {
 
 #[test]
 fn running_pid_is_per_instance_not_a_single_slot() {
-    let (mut host, id) = host_with_instance("pid");
+    let (mut host, id, _root) = host_with_instance("pid");
     host.launches.push(live("a", "s-a", 111));
     host.launches.push(live("b", "s-b", 222));
 
@@ -76,7 +85,7 @@ fn running_pid_is_per_instance_not_a_single_slot() {
 
 #[test]
 fn duplicate_launch_is_rejected_before_spawning() {
-    let (mut host, id) = host_with_instance("dup");
+    let (mut host, id, _root) = host_with_instance("dup");
     let _ = host.drain_events();
     host.launches.push(live(&id, "s", 111));
 
@@ -101,9 +110,9 @@ fn duplicate_launch_is_rejected_before_spawning() {
 
 #[test]
 fn pending_window_also_blocks_a_second_launch() {
-    let (mut host, id) = host_with_instance("pending");
-    // 模拟「launch::start 已调用、后台线程还没回报 LaunchStarted」的窗口。
-    host.pending.insert(id.clone());
+    let (mut host, id, _root) = host_with_instance("pending");
+    // 走 start_launch 用的同一个入口，模拟「已受理、后台线程还没回报 LaunchStarted」。
+    host.mark_pending(&id);
     assert!(host.in_flight(&id));
 
     let _ = host.drain_events();
@@ -121,8 +130,8 @@ fn pending_window_also_blocks_a_second_launch() {
 
 #[test]
 fn launch_started_registers_and_launch_end_clears() {
-    let (mut host, id) = host_with_instance("cycle");
-    host.pending.insert(id.clone());
+    let (mut host, id, _root) = host_with_instance("cycle");
+    host.mark_pending(&id);
 
     host.handle(HostTask::LaunchStarted {
         id: id.clone(),
@@ -145,7 +154,7 @@ fn launch_started_registers_and_launch_end_clears() {
 
 #[test]
 fn refresh_keeps_running_instances_running() {
-    let (mut host, id) = host_with_instance("refresh-run");
+    let (mut host, id, _root) = host_with_instance("refresh-run");
     host.launches.push(live(&id, "s", 4_242));
     let _ = host.drain_events();
 
@@ -164,9 +173,10 @@ fn refresh_keeps_running_instances_running() {
 
 #[test]
 fn refresh_keeps_pending_as_busy_and_failed_as_failed() {
-    let (mut host, id) = host_with_instance("refresh-busy");
+    let (mut host, id, _root) = host_with_instance("refresh-busy");
 
-    host.pending.insert(id.clone());
+    // Busy：走 start_launch 用的同一个入口（mark_pending），而不是直接改字段。
+    host.mark_pending(&id);
     let pending = instances_from_events({
         host.refresh_instances();
         host.drain_events()
@@ -182,8 +192,16 @@ fn refresh_keeps_pending_as_busy_and_failed_as_failed() {
         }
     ));
 
-    host.pending.remove(&id);
-    host.failed.insert(id.clone(), "崩溃（exit 1）".to_string());
+    // Failed：走唯一真实写入路径 LaunchEnd（不是手动塞 failed 表）。
+    host.handle(HostTask::LaunchEnd(Box::new(LaunchFinished {
+        id: id.clone(),
+        session: "20261031T120000-dead01".to_string(),
+        outcome: LogOutcome::Crashed,
+        summary: "崩溃（exit 1）".to_string(),
+    })));
+    assert!(!host.pending.contains(&id), "LaunchEnd 必须清 pending");
+    assert!(!host.in_flight(&id), "收尾后该实例要能被重新启动");
+
     let failed = instances_from_events({
         host.refresh_instances();
         host.drain_events()
@@ -197,6 +215,42 @@ fn refresh_keeps_pending_as_busy_and_failed_as_failed() {
             reason: "崩溃（exit 1）".to_string()
         },
         "失败原因要经得住一次刷新（否则磁贴的「重试」外观会被 Idle 盖掉）"
+    );
+}
+
+#[test]
+fn launch_end_before_launch_started_still_releases_the_instance() {
+    let (mut host, id, _root) = host_with_instance("fail-early");
+    // build_request / spawn 失败的现场：start_launch 已标 pending、后台线程只发 LaunchEnd。
+    host.mark_pending(&id);
+    assert!(host.in_flight(&id));
+
+    host.handle(HostTask::LaunchEnd(Box::new(LaunchFinished {
+        id: id.clone(),
+        session: String::new(),
+        outcome: LogOutcome::Crashed,
+        summary: "启动失败：找不到 Java".to_string(),
+    })));
+
+    assert!(
+        !host.pending.contains(&id),
+        "LaunchEnd 早于 LaunchStarted 时也必须清 pending（否则该实例本会话再也起不来）"
+    );
+    assert!(!host.in_flight(&id), "失败后要能重试");
+
+    let failed = instances_from_events({
+        host.refresh_instances();
+        host.drain_events()
+    })
+    .into_iter()
+    .find(|instance| instance.id == id)
+    .expect("实例存在");
+    assert_eq!(
+        failed.runtime,
+        InstanceRuntime::Failed {
+            reason: "启动失败：找不到 Java".to_string()
+        },
+        "早失败也要在磁贴上留下「失败/重试」，不能被 Idle 盖掉"
     );
 }
 

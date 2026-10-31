@@ -255,6 +255,14 @@ impl CoreHost {
         self.pending.contains(key) || self.launches.iter().any(|live| live.instance == key)
     }
 
+    /// 标记「已受理、等后台线程回报」（`launch::start` 之后的窗口）。
+    ///
+    /// 单测也走这个入口而不是直接改 `pending`，保证测的是真实状态流转。
+    fn mark_pending(&mut self, id: &str) {
+        self.pending.insert(id.to_string());
+        self.failed.remove(id);
+    }
+
     fn start_launch(&mut self, id: &str) {
         if self.in_flight(id) {
             self.toast(ToastKind::Warn, "这个实例已经在启动/运行中");
@@ -269,8 +277,7 @@ impl CoreHost {
             self.toast(ToastKind::Warn, "这个实例已经在启动/运行中");
             return;
         }
-        self.pending.insert(instance_id.clone());
-        self.failed.remove(&instance_id);
+        self.mark_pending(&instance_id);
         if let Some(notice) = game::mode_change_notice(&self.env, &instance_id) {
             self.push_notice(notice);
         }

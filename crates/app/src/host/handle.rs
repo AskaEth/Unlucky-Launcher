@@ -90,10 +90,19 @@ impl CoreHost {
                 self.send(CoreEvent::InstanceRuntimeChanged { id, runtime });
             }
             HostTask::LaunchEnd(finished) => {
+                // 收尾可能发生在 LaunchStarted 之前（build_request / spawn 失败只发
+                // LaunchEnd）：pending 必须在这里也清掉，否则 in_flight 恒真、该实例
+                // 本会话内再也起不来。
+                self.pending.remove(&finished.id);
                 self.launches.retain(|live| live.instance != finished.id);
                 let runtime = if finished.outcome == LogOutcome::Ok {
+                    self.failed.remove(&finished.id);
                     InstanceRuntime::Idle
                 } else {
+                    // 记住失败原因：随后的 refresh_instances 会重建快照，
+                    // 不记的话磁贴的「失败/重试」外观会被 Idle 盖掉。
+                    self.failed
+                        .insert(finished.id.clone(), finished.summary.clone());
                     InstanceRuntime::Failed {
                         reason: finished.summary.clone(),
                     }
