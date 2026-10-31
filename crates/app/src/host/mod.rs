@@ -17,6 +17,7 @@ mod dispatch;
 mod engine;
 pub mod env;
 mod game;
+mod handle;
 mod identity;
 mod install;
 mod java;
@@ -32,7 +33,7 @@ use std::time::Duration;
 
 use crate::dto::{
     AccountView, AppCommand, AppEvent, Backend, CoreEvent, DiagnosisReport, InstallProgressView,
-    InstanceRuntime, JavaChainStep, LogOutcome, NoticeView,
+    InstanceRuntime, JavaChainStep, NoticeView,
 };
 use crate::mock::MockBackend;
 use crate::toast::{Toast, ToastKind};
@@ -46,6 +47,14 @@ const MAX_TASKS_PER_TICK: usize = 64;
 
 /// 实时日志尾随间隔（拍数，33ms/拍 → 约 600ms 一次）。
 const TAIL_POLL_TICKS: u64 = 18;
+
+/// 一次在跑的启动（并发启动时按实例 id 区分，停止/尾随都不会串到别的实例）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LiveLaunch {
+    instance: String,
+    session: String,
+    pid: u32,
+}
 
 /// 真实 host。
 pub struct CoreHost {
@@ -63,8 +72,8 @@ pub struct CoreHost {
     java_message: String,
     install: Option<InstallProgressView>,
     notices: Vec<NoticeView>,
-    /// 最近一次启动的 pid（停止按钮用）
-    launch_pid: Option<u32>,
+    /// 在跑的启动（实例 → 会话 → pid；支持多个实例同时启动，停止按 id 找正确的 pid）
+    launches: Vec<LiveLaunch>,
     /// 实时日志尾随器
     tail: logs::Tail,
     /// AI 对话的临时后端（agent GUI host 落地前的占位）
@@ -97,7 +106,7 @@ impl CoreHost {
             java_message: String::new(),
             install: None,
             notices: Vec::new(),
-            launch_pid: None,
+            launches: Vec::new(),
             tail: logs::Tail::default(),
             chat: MockBackend::default(),
             install_cancel: None,
@@ -202,6 +211,14 @@ impl CoreHost {
             return;
         };
         let instance_id = target.id.clone();
+        if self
+            .launches
+            .iter()
+            .any(|live| live.instance == instance_id)
+        {
+            self.toast(ToastKind::Warn, "这个实例已经在启动/运行中");
+            return;
+        }
         if let Some(notice) = game::mode_change_notice(&self.env, &instance_id) {
             self.push_notice(notice);
         }
@@ -215,10 +232,13 @@ impl CoreHost {
         launch::start(self.env.clone(), self.tx.clone(), target);
     }
 
-    /// 一台在跑的实例的 pid（从快照或最近一次启动里取）。
+    /// 某实例在跑的 pid（按实例 id 查启动表；不再有「最近一次启动」这种单槽）。
+    ///
+    /// 兜底分支读实例快照的 `Running { pid }`：host 自己发的运行时事件会写回快照，
+    /// 但快照是重建的（`game::instances` 每次 Idle），所以这层只是给将来留的口。
     fn running_pid(&self, id: &str) -> Option<u32> {
-        if let Some(pid) = self.launch_pid {
-            return Some(pid);
+        if let Some(live) = self.launches.iter().find(|live| live.instance == id) {
+            return Some(live.pid);
         }
         game::instances(&self.env)
             .into_iter()
@@ -227,118 +247,6 @@ impl CoreHost {
                 InstanceRuntime::Running { pid } => Some(pid),
                 _ => None,
             })
-    }
-
-    /// 后台消息 → 事件。
-    fn handle(&mut self, task: HostTask) {
-        match task {
-            HostTask::Versions(Ok(versions)) => self.send(CoreEvent::VersionListChanged(versions)),
-            HostTask::Versions(Err(reason)) => {
-                self.toast(ToastKind::Warn, format!("拉取版本清单失败：{reason}"));
-            }
-            HostTask::Install(progress) => {
-                self.install = Some(*progress.clone());
-                self.send(CoreEvent::InstallProgress(Some(*progress)));
-            }
-            HostTask::InstallDone { progress, result } => {
-                self.install_cancel = None;
-                self.install = Some(*progress.clone());
-                self.send(CoreEvent::InstallProgress(Some(*progress)));
-                match result {
-                    Ok(_) => {
-                        self.refresh_instances();
-                        self.send(CoreEvent::LogSessionsChanged(logs::sessions(&self.env)));
-                    }
-                    Err(reason) => self.toast(ToastKind::Error, reason),
-                }
-            }
-            HostTask::Accounts(accounts) => {
-                self.accounts = accounts.clone();
-                self.send(CoreEvent::AccountsChanged(accounts));
-                self.refresh_instances();
-            }
-            HostTask::Login(view) => self.send(CoreEvent::DeviceLoginChanged(*view)),
-            HostTask::Java(page) => self.send(CoreEvent::JavaChanged(*page)),
-            HostTask::Logs {
-                sessions,
-                lines,
-                diagnosis,
-            } => {
-                self.send(CoreEvent::LogSessionsChanged(sessions));
-                self.send(CoreEvent::LogLinesChanged(lines));
-                if let Some(report) = diagnosis {
-                    self.send(CoreEvent::DiagnosisReady(report));
-                }
-            }
-            HostTask::Sessions(sessions) => self.send(CoreEvent::LogSessionsChanged(sessions)),
-            HostTask::Tail(batch) => {
-                if batch.running {
-                    self.send(CoreEvent::LogLinesChanged(batch.lines));
-                } else {
-                    self.send(CoreEvent::LogAppended(*batch));
-                }
-            }
-            HostTask::LaunchStarted {
-                id,
-                session_id,
-                pid,
-            } => {
-                self.launch_pid = Some(pid);
-                self.tail.attach(
-                    self.env
-                        .sessions_root()
-                        .join("game")
-                        .join(format!("{session_id}.jsonl")),
-                    &session_id,
-                );
-                self.send(CoreEvent::InstanceRuntimeChanged {
-                    id,
-                    runtime: InstanceRuntime::Running { pid },
-                });
-            }
-            HostTask::Runtime { id, runtime } => {
-                self.send(CoreEvent::InstanceRuntimeChanged { id, runtime });
-            }
-            HostTask::LaunchEnd(finished) => {
-                self.launch_pid = None;
-                let runtime = if finished.outcome == LogOutcome::Ok {
-                    InstanceRuntime::Idle
-                } else {
-                    InstanceRuntime::Failed {
-                        reason: finished.summary.clone(),
-                    }
-                };
-                self.send(CoreEvent::InstanceRuntimeChanged {
-                    id: finished.id.clone(),
-                    runtime,
-                });
-                self.send(CoreEvent::LaunchFinished((*finished).clone()));
-                self.tail.detach();
-                self.send(CoreEvent::LogSessionsChanged(logs::sessions(&self.env)));
-                self.refresh_instances();
-            }
-            HostTask::Crash(report) => {
-                self.send(CoreEvent::DiagnosisReady(*report));
-            }
-            HostTask::Notice(notice) => self.push_notice(*notice),
-            HostTask::Toast(toast) => self.events.push_back(AppEvent::Toast(*toast)),
-        }
-    }
-
-    /// 尾随运行中会话（每 `TAIL_POLL_TICKS` 拍一次）。
-    fn poll_tail(&mut self) {
-        let Some((session, lines)) = self.tail.poll() else {
-            return;
-        };
-        if lines.is_empty() {
-            return;
-        }
-        let running = self.launch_pid.is_some();
-        self.send(CoreEvent::LogAppended(crate::dto::LiveLogBatch {
-            session,
-            lines,
-            running,
-        }));
     }
 }
 
