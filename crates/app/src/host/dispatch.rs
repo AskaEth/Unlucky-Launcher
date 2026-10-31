@@ -109,6 +109,16 @@ impl CoreHost {
                 }));
                 accounts::start_login(self.env.clone(), self.tx.clone(), job);
             }
+            AppCommand::StartBrowserLogin => {
+                self.login = Some(LoginJob::new());
+                let job = self.login.clone().unwrap_or_default();
+                self.send(CoreEvent::DeviceLoginChanged(crate::dto::DeviceLoginView {
+                    phase: crate::dto::DeviceLoginPhase::Requesting,
+                    message: "正在准备浏览器登录（本地回调端口）…".to_string(),
+                    ..crate::dto::DeviceLoginView::new()
+                }));
+                accounts::start_browser_login(self.env.clone(), self.tx.clone(), job);
+            }
             AppCommand::CancelDeviceLogin => {
                 if let Some(job) = &self.login {
                     job.cancel();

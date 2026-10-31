@@ -1,25 +1,35 @@
-//! 微软轨：device-code 全流程 + 会话/刷新语义（`PlanDoc/07-accounts.md` §1、`analyse/04` §4–§5）。
+//! 微软轨：device-code 与授权码（浏览器）两条登录流 + 会话/刷新语义
+//! （`PlanDoc/07-accounts.md` §1、`analyse/04` §4–§5、`research/08` §3）。
 //!
-//! 分四块，各管一件事：
+//! 分五块，各管一件事：
 //! - [`session`]：`MicrosoftSession`（凭据载荷）与**刷新判定**（纯函数，可脱离网络单测）；
 //! - [`endpoints`]：端点表（生产 = 微软消费版直连；测试 = 整表指向 mock）；
 //! - [`flow`]：device-code 发起 / 轮询 / refresh（OAuth 层）；
+//! - [`authcode`] + [`callback`]：授权码流（授权 URL + 本地 HTTP 回调服务器 + code 换 token）；
 //! - [`chain`]：XBL → XSTS → login_with_xbox → entitlements → profile（Xbox/MC 层）。
+//!
+//! 两条流只差「怎么拿到 MS access_token」：拿到之后都进同一个 [`chain::complete_chain`]，
+//! 落盘/刷新也共用 [`MicrosoftSession`]，所以 GUI 账户页的两颗按钮不会长出两套凭据语义。
 //!
 //! # client id 从哪来
 //!
-//! device-code 流必须带一个**已在 Azure 注册的公共客户端 id**。HMCL 把它烘进 jar 的
+//! 两条流都必须带一个**已在 Azure 注册的公共客户端 id**（且租户是 `consumers`、
+//! 重定向 URI 登记为 `http://localhost`）。HMCL 把它烘进 jar 的
 //! manifest（`hmcl.microsoft.auth.id`），我们同理：二进制里不硬编码，改由
 //! `ULL_MSA_CLIENT_ID`（运行期）或构建期 `option_env!` 提供。没有配时
 //! [`MicrosoftAuth::from_env`] 返回 [`AuthError::Unsupported`] 并说清要配什么——
 //! 这比编一个假 id 让用户看到 `invalid_client` 诚实。
 
+pub mod authcode;
+pub mod callback;
 pub mod chain;
 pub mod endpoints;
 pub mod flow;
 
 pub mod session;
 
+pub use authcode::{AuthCodePolicy, AuthCodePrompt, RedirectUri};
+pub use callback::CallbackServer;
 pub use endpoints::MicrosoftEndpoints;
 pub use flow::{DeviceCodePrompt, PollPolicy};
 pub use session::{MicrosoftSession, RefreshDecision, RefreshReason, USER_TYPE_MSA};
@@ -45,6 +55,7 @@ pub struct MicrosoftAuth {
     client_id: String,
     endpoints: MicrosoftEndpoints,
     poll: PollPolicy,
+    authcode: AuthCodePolicy,
     journal: Option<AuthJournal>,
 }
 
@@ -62,6 +73,7 @@ impl MicrosoftAuth {
             client_id: client_id.into(),
             endpoints: MicrosoftEndpoints::consumers(),
             poll: PollPolicy::default(),
+            authcode: AuthCodePolicy::default(),
             journal: None,
         })
     }
@@ -131,6 +143,13 @@ impl MicrosoftAuth {
         self
     }
 
+    /// 换授权码流参数（回调超时 / 固定端口 / 绑定重试 / 固定 state；测试与 CLI 用）。
+    #[must_use]
+    pub fn with_authcode_policy(mut self, policy: AuthCodePolicy) -> Self {
+        self.authcode = policy;
+        self
+    }
+
     /// 当前端点表。
     #[must_use]
     pub fn endpoints(&self) -> &MicrosoftEndpoints {
@@ -175,6 +194,34 @@ impl MicrosoftAuth {
         )
         .await?;
         chain::complete_chain(&self.client, &self.endpoints, tokens, now_ms()).await
+    }
+
+    /// 授权码流登录（浏览器 + 本地回调，`research/08` §3 方案 A，GUI 的默认入口）。
+    ///
+    /// `present` 在端口绑定之后、等待回调之前被调用：宿主在这一刻拉起系统默认浏览器
+    /// （core 不做 UI，也不假设有 GUI——CLI 可以只把 URL 打到 stderr）。
+    /// 失败时与 [`Self::device_code_login`] 一样往失败日志追加一条结构化记录（M38）。
+    ///
+    /// # Errors
+    ///
+    /// 端口绑不上/网络失败、等回调超时、用户在授权页取消、OAuth 拒绝，以及整链的
+    /// [`AuthError`]（含白名单未批时 `login_with_xbox` 的 403 诊断）。
+    pub async fn authcode_login<F>(&self, present: F) -> AuthResult<MicrosoftSession>
+    where
+        F: FnOnce(&AuthCodePrompt),
+    {
+        let result = authcode::login(
+            &self.client,
+            &self.endpoints,
+            &self.client_id,
+            self.authcode.clone(),
+            present,
+        )
+        .await;
+        if let Err(error) = &result {
+            self.record_failure("authcode_login", error);
+        }
+        result
     }
 
     /// 刷新：Live refresh → 整链重跑（**原样覆盖 refresh_token**）。

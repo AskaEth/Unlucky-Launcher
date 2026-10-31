@@ -36,6 +36,22 @@ fn accounts_and_device_login_render() {
 }
 
 #[test]
+fn browser_login_panel_renders_the_authorization_link() {
+    let mut state = AppState::new();
+    state.device_login = DeviceLoginView::browser_waiting(
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=x",
+        300,
+        None,
+    );
+    let device = device(&state);
+    assert!(device.visible && device.busy);
+    assert_eq!(device.user_code, "", "授权码流没有用户码");
+    assert!(device.verification_uri.contains("/authorize?client_id=x"));
+    assert_eq!(device.qr_link, device.verification_uri);
+    assert_eq!(device.expires, 300);
+}
+
+#[test]
 fn install_progress_renders_labels_and_terminal_flags() {
     let mut state = AppState::new();
     state.install = Some(InstallProgressView {

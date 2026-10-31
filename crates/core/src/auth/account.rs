@@ -60,7 +60,7 @@ impl std::fmt::Display for AccountId {
 pub enum AccountKind {
     /// 离线（本地生成的 UUID，不联网）。
     Offline,
-    /// 微软（device-code）。
+    /// 微软（device-code / 授权码浏览器）。
     Microsoft,
     /// authlib-injector 第三方认证服务器（标准 Yggdrasil 协议）。
     AuthlibInjector,

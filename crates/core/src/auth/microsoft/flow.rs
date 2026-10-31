@@ -223,7 +223,7 @@ pub(crate) async fn refresh_tokens(
     tokens_from(&reply, &endpoints.token)
 }
 
-fn tokens_from(reply: &Reply, url: &str) -> AuthResult<OAuthTokens> {
+pub(crate) fn tokens_from(reply: &Reply, url: &str) -> AuthResult<OAuthTokens> {
     let access_token = reply
         .text("access_token")
         .ok_or_else(|| AuthError::Malformed(format!("{url} 响应缺 access_token")))?;
@@ -237,7 +237,7 @@ fn tokens_from(reply: &Reply, url: &str) -> AuthResult<OAuthTokens> {
 }
 
 /// OAuth 错误归一：**`error` 非空即失败**（HMCL 只在两个字段都非空时处理，我们收紧）。
-fn oauth_error(reply: &Reply, url: &str) -> AuthError {
+pub(crate) fn oauth_error(reply: &Reply, url: &str) -> AuthError {
     let Some(code) = reply.text("error") else {
         return AuthError::network(
             url.split('?').next().unwrap_or(url),
