@@ -62,6 +62,8 @@ impl CoreHost {
                 session_id,
                 pid,
             } => {
+                self.pending.remove(&id);
+                self.failed.remove(&id);
                 self.launches.retain(|live| live.instance != id);
                 self.launches.push(LiveLaunch {
                     instance: id.clone(),

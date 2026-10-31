@@ -28,7 +28,7 @@ mod meter;
 mod settings;
 mod versions;
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
 use crate::dto::{
@@ -74,6 +74,10 @@ pub struct CoreHost {
     notices: Vec<NoticeView>,
     /// 在跑的启动（实例 → 会话 → pid；支持多个实例同时启动，停止按 id 找正确的 pid）
     launches: Vec<LiveLaunch>,
+    /// 已受理但后台线程还没回报 `LaunchStarted` 的实例（防「启动中重复点启动」起第二个进程）
+    pending: BTreeSet<String>,
+    /// 上次启动失败的实例与原因（刷新快照时保住磁贴的「失败/重试」外观）
+    failed: BTreeMap<String, String>,
     /// 实时日志尾随器
     tail: logs::Tail,
     /// AI 对话的临时后端（agent GUI host 落地前的占位）
@@ -90,6 +94,16 @@ impl CoreHost {
 
     /// 用给定环境装配（截图/单测通道）。
     pub fn new(env: HostEnv) -> Self {
+        Self::build(env, true)
+    }
+
+    /// 单测用：不跑 `refresh_all`（不起版本清单网络线程），其余装配一致。
+    #[cfg(test)]
+    pub(crate) fn headless(env: HostEnv) -> Self {
+        Self::build(env, false)
+    }
+
+    fn build(env: HostEnv, refresh: bool) -> Self {
         let (tx, rx) = job::channel();
         game::ensure_root(&env);
         let mut host = Self {
@@ -107,11 +121,15 @@ impl CoreHost {
             install: None,
             notices: Vec::new(),
             launches: Vec::new(),
+            pending: BTreeSet::new(),
+            failed: BTreeMap::new(),
             tail: logs::Tail::default(),
             chat: MockBackend::default(),
             install_cancel: None,
         };
-        host.refresh_all();
+        if refresh {
+            host.refresh_all();
+        }
         host
     }
 
@@ -143,8 +161,32 @@ impl CoreHost {
         versions::spawn_list(self.env.clone(), self.tx.clone());
     }
 
+    /// 重建实例快照，并把**真实运行时**盖回去。
+    ///
+    /// `game::instances` 只读盘（每条都是 `Idle`），所以在跑的实例必须在重建后按
+    /// host 自己的启动表覆写 `Running{pid}`/`Busy`，否则任意一次刷新（装版本成功、
+    /// 加删账户、另一实例收尾）都会把磁贴打回 Idle：停止键与「运行中」条消失，
+    /// 进程还在跑却再也停不下来。
     fn refresh_instances(&mut self) {
-        let instances = game::instances(&self.env);
+        let mut instances = game::instances(&self.env);
+        for instance in &mut instances {
+            if let Some(live) = self
+                .launches
+                .iter()
+                .find(|live| live.instance == instance.id)
+            {
+                instance.runtime = InstanceRuntime::Running { pid: live.pid };
+            } else if self.pending.contains(&instance.id) {
+                instance.runtime = InstanceRuntime::Busy {
+                    stage: crate::dto::LaunchStage::Launch,
+                    progress: crate::dto::Progress { done: 0, total: 1 },
+                };
+            } else if let Some(reason) = self.failed.get(&instance.id) {
+                instance.runtime = InstanceRuntime::Failed {
+                    reason: reason.clone(),
+                };
+            }
+        }
         self.send(CoreEvent::InstancesChanged(instances));
     }
 
@@ -205,20 +247,30 @@ impl CoreHost {
         })
     }
 
+    /// 某实例是否已在启动/运行（`pending` 与 `launches` 的并集）。
+    ///
+    /// 只查 `launches` 不够：`launch::start` 到后台线程回报 `LaunchStarted` 之间有窗口，
+    /// 这期间重复点启动会起第二个进程、并把旧 pid 在启动表里顶掉（旧进程变孤儿）。
+    fn in_flight(&self, key: &str) -> bool {
+        self.pending.contains(key) || self.launches.iter().any(|live| live.instance == key)
+    }
+
     fn start_launch(&mut self, id: &str) {
+        if self.in_flight(id) {
+            self.toast(ToastKind::Warn, "这个实例已经在启动/运行中");
+            return;
+        }
         let Some(target) = self.launch_target(id) else {
             self.toast(ToastKind::Error, format!("找不到实例 {id}"));
             return;
         };
         let instance_id = target.id.clone();
-        if self
-            .launches
-            .iter()
-            .any(|live| live.instance == instance_id)
-        {
+        if self.in_flight(&instance_id) {
             self.toast(ToastKind::Warn, "这个实例已经在启动/运行中");
             return;
         }
+        self.pending.insert(instance_id.clone());
+        self.failed.remove(&instance_id);
         if let Some(notice) = game::mode_change_notice(&self.env, &instance_id) {
             self.push_notice(notice);
         }
@@ -276,3 +328,7 @@ impl Backend for CoreHost {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "launch_state_tests.rs"]
+mod launch_state_tests;
