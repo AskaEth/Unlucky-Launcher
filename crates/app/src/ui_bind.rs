@@ -1,0 +1,333 @@
+//! 绑定层（核心）：窗口/状态/后端的持有与同步；回调接线在 [`crate::callbacks`]。
+//!
+//! P0 的“后端”是 [`MockBackend`]（脚本化假数据）；把 `Box<dyn Backend>` 换成真实的 core/agent
+//! host 时，除本文件、`conv.rs`、`callbacks.rs` 外都不需要改
+//! （通道语义见 `DevDocs/SubAgentsTalk/app-DTO通道约定.md`）。
+//!
+//! 主题与外观（D17 / 09 §101-113）：落盘配置由 [`SettingsBridge`] 读写（`config/launcher.json`，
+//! 与 `ull config set` 同一份），tick 里 1s 一次 `mtime` 热切；系统主题由
+//! `core::platform::theme_probe` 做启动对齐 + 后端不支持时的兜底轮询。
+
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::Duration;
+
+use slint::{ComponentHandle, ModelRc, VecModel};
+
+use crate::bg_image::BackgroundLayers;
+use crate::conv;
+use crate::dto::{AppCommand, Backend, InstanceId};
+use crate::mock::MockBackend;
+use crate::prefs::BgFill;
+use crate::settings_bridge::SettingsBridge;
+use crate::state::AppState;
+use crate::{MainWindow, SettingSection};
+
+/// 定时器节拍：33ms ≈ 30fps（磁贴进度环 / 流式文本 / Toast TTL 的刷新下限）。
+const TICK_MS: u64 = 33;
+
+/// 配置热切轮询间隔（拍数）：约 1s 一次 `mtime` 比对，AI/CLI 改完下一拍即生效。
+pub(crate) const CONFIG_POLL_TICKS: u64 = 30;
+
+/// 系统主题兜底轮询间隔（拍数）：只在 `auto` 且后端不认识系统主题时启动（约 3s）。
+pub(crate) const SYSTEM_THEME_POLL_TICKS: u64 = 90;
+
+/// tile 模式重建画布的窗口尺寸粒度（像素）：避免拖动窗口时反复重算平铺画布。
+pub(crate) const TILE_REGENERATE_STEP: u32 = 128;
+
+/// 应用外壳：持有窗口、状态与后端，把三者缝在一起。
+pub struct AppUi {
+    inner: Rc<Inner>,
+    timer: slint::Timer,
+}
+
+pub(crate) struct Inner {
+    pub(crate) ui: MainWindow,
+    pub(crate) state: RefCell<AppState>,
+    pub(crate) backend: RefCell<Box<dyn Backend>>,
+    /// `config/launcher.json` 读写桥（app 不自己写盘：一律走 core::setting 的 schema API）
+    pub(crate) bridge: RefCell<SettingsBridge>,
+    /// 当前背景图 / 模糊层（避免每次同步都重新解码）
+    pub(crate) background: RefCell<BackgroundLayers>,
+    /// 生成 `background` 时的输入（路径 / 填充模式 / 窗口粒度尺寸）
+    pub(crate) background_key: RefCell<Option<BackgroundKey>>,
+    /// 拍数（轮询节拍）
+    pub(crate) ticks: Cell<u64>,
+    /// 是否已经做过启动时的系统主题对齐
+    pub(crate) system_theme_probed: Cell<bool>,
+}
+
+/// 背景图加工输入（值相同就不重新解码）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BackgroundKey {
+    pub(crate) path: String,
+    pub(crate) fill: BgFill,
+    /// tile 用的窗口尺寸（按 [`TILE_REGENERATE_STEP`] 量化；cover/contain 恒为 (0, 0)）
+    pub(crate) viewport: (u32, u32),
+}
+
+impl AppUi {
+    /// 建状态 + 假后端、读配置、接全部回调、灌初始事件并做第一次同步。
+    pub fn new(ui: MainWindow) -> Self {
+        // 先读一次落盘配置：主题三态 + 外观四件必须在首帧前就位（否则会闪一下出厂外观）
+        let bridge = SettingsBridge::open();
+        let (appearance, theme) = bridge.load();
+        let mut state = AppState::new();
+        state.prefs.appearance = appearance;
+        state.prefs.theme = theme;
+
+        let inner = Rc::new(Inner {
+            ui,
+            state: RefCell::new(state),
+            backend: RefCell::new(Box::new(MockBackend::new())),
+            bridge: RefCell::new(bridge),
+            background: RefCell::new(BackgroundLayers::default()),
+            background_key: RefCell::new(None),
+            ticks: Cell::new(0),
+            system_theme_probed: Cell::new(false),
+        });
+
+        crate::callbacks::wire(Rc::downgrade(&inner));
+        inner.drain_events();
+        inner.align_system_theme();
+        inner.apply_theme();
+        inner.apply_appearance();
+        inner.sync();
+
+        Self {
+            inner,
+            timer: slint::Timer::default(),
+        }
+    }
+
+    /// 进入 Slint 事件循环（窗口句柄由本结构持有，直到循环退出）。
+    pub fn run(&self) -> Result<(), slint::PlatformError> {
+        self.inner.ui.run()
+    }
+
+    /// 启动 33ms 节拍（后端 tick → 事件 → 状态 → UI）。
+    pub fn start_timer(&self) {
+        let inner = Rc::clone(&self.inner);
+        self.timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(TICK_MS),
+            move || inner.tick(),
+        );
+    }
+
+    /// 推进一拍（截图通道用：没有事件循环时手动把 tick 走起来，让 mock 事件灌进状态）。
+    pub fn tick_once(&self) {
+        self.inner.tick();
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// 直接跳到「设置 → 外观」页（截图验收用：证明外观分组的四组控件真的接线了）。
+    pub fn open_settings_appearance(&self) {
+        self.inner
+            .state
+            .borrow_mut()
+            .navigate(crate::router::Route::Settings);
+        self.inner.sync();
+        self.inner
+            .ui
+            .set_settings_section(SettingSection::Appearance);
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// 渲染当前场景并存成 PNG（`--screenshot` 通道；见 `crate::png`）。
+    ///
+    /// 为什么要这条通道：验收环境可能没有交互桌面（`CopyFromScreen` 直接失败），
+    /// 而 Slint 的软件渲染器可以把场景渲染进内存像素缓冲（`Window::take_snapshot`），
+    /// 结果与屏幕上看到的逐像素一致，且不需要 GPU。
+    ///
+    /// # Errors
+    /// 窗口显示失败、快照失败或写文件失败时返回错误。
+    pub fn render_screenshot(&self, path: &str) -> Result<(), slint::PlatformError> {
+        let ui = &self.inner.ui;
+        ui.show()?;
+        // 固定逻辑尺寸 = main.slint 的默认窗口口径，保证验收图可比
+        ui.window()
+            .set_size(slint::WindowSize::Logical(slint::LogicalSize::new(
+                1180.0, 760.0,
+            )));
+        // 先走几拍：把 mock 事件（实例/版本/日志）与 33ms 节拍的效果灌进去
+        for _ in 0..4 {
+            self.tick_once();
+            std::thread::sleep(Duration::from_millis(TICK_MS));
+        }
+        let buffer = ui.window().take_snapshot()?;
+        let bytes = crate::png::encode_rgba8(&buffer);
+        std::fs::write(path, bytes)
+            .map_err(|error| slint::PlatformError::Other(format!("写截图失败 {path}: {error}")))?;
+        Ok(())
+    }
+}
+
+/// 发送一条 AI 提问：**只发指令 + 回流事件**，绝不做本地乐观回显。
+///
+/// 契约 §3 规定 host 先发 `MessageAppended(user)`：本地再 push 一次用户消息就会重复；
+/// 且流式气泡的收敛依赖事件里的 `MessageFinished{index}`，本地多建的占位会变成
+/// 永不收敛的「幽灵气泡」（review P1-1）。callbacks 与单测都走这一个入口。
+pub(crate) fn send_agent_message(state: &mut AppState, backend: &mut dyn Backend, text: &str) {
+    backend.dispatch(AppCommand::AskAgent(text.to_string()));
+    for event in backend.drain_events() {
+        state.apply(event);
+    }
+}
+
+impl Inner {
+    /// 走一次完整的「提问 → 事件回流」。
+    pub(crate) fn ask_agent(&self, text: &str) {
+        let mut state = self.state.borrow_mut();
+        let mut backend = self.backend.borrow_mut();
+        send_agent_message(&mut state, backend.as_mut(), text);
+    }
+
+    pub(crate) fn dispatch(&self, command: AppCommand) {
+        self.backend.borrow_mut().dispatch(command);
+        self.drain_events();
+    }
+
+    pub(crate) fn drain_events(&self) {
+        let events = self.backend.borrow_mut().drain_events();
+        if events.is_empty() {
+            return;
+        }
+        let mut state = self.state.borrow_mut();
+        for event in events {
+            state.apply(event);
+        }
+    }
+
+    fn tick(&self) {
+        self.backend
+            .borrow_mut()
+            .tick(Duration::from_millis(TICK_MS));
+        self.drain_events();
+        self.state.borrow_mut().toasts.expire(TICK_MS);
+        self.ticks.set(self.ticks.get() + 1);
+        self.poll_settings();
+        self.poll_system_theme();
+        self.sync();
+    }
+
+    pub(crate) fn sync(&self) {
+        let state = self.state.borrow();
+        let ui = &self.ui;
+
+        ui.set_route(conv::route(state.route()));
+        ui.set_nav_collapsed(state.prefs.nav_collapsed);
+        ui.set_ai_collapsed(state.prefs.ai_collapsed);
+        ui.set_tile_size(conv::tile_size(state.prefs.tile_size));
+        ui.set_instance_view(conv::instance_view(state.prefs.instance_view));
+        ui.set_download_category(conv::category_from(state.prefs.download_category));
+        ui.set_download_installed_only(state.installed_only);
+        ui.set_theme_mode(conv::theme_mode(state.prefs.theme));
+
+        ui.set_tiles(model(conv::tiles(&state)));
+        ui.set_running_tiles(model(conv::running_tiles(&state)));
+        ui.set_versions(model(conv::versions(&state)));
+        ui.set_log_sessions(model(conv::log_sessions(&state)));
+        ui.set_log_lines(model(conv::log_lines(&state)));
+        ui.set_toasts(model(conv::toasts(&state)));
+
+        let (diagnosis, has_diagnosis) = conv::diagnosis(&state);
+        ui.set_diagnosis(diagnosis);
+        ui.set_has_diagnosis(has_diagnosis);
+        ui.set_selected_session(state.selected_session.clone().unwrap_or_default().into());
+
+        ui.set_ai_messages(model(conv::chat(&state)));
+        ui.set_ai_streaming(state.ai.streaming);
+        ui.set_yolo(state.ai.yolo);
+        ui.set_ai_endpoint_label(state.ai.endpoint_label.clone().into());
+
+        let (dialog, open, queued) = conv::dialog(&state);
+        ui.set_dialog(dialog);
+        ui.set_dialog_open(open);
+        ui.set_dialog_queued(queued);
+    }
+}
+
+pub(crate) fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
+    ModelRc::new(VecModel::from(items))
+}
+
+/// 停止实例的指令构造（阶段 C 的磁贴「停止」键用；P0 只保留 API）。
+#[allow(dead_code)]
+pub fn stop_instance(id: &InstanceId) -> AppCommand {
+    AppCommand::StopInstance(id.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::send_agent_message;
+    use crate::dto::{Backend, ChatRole};
+    use crate::mock::MockBackend;
+    use crate::state::AppState;
+
+    /// 集成测试（callbacks→state→mock 全链路）：发一次提问后
+    /// ①用户消息恰出现一次（无本地回显重复）②所有 assistant 气泡收敛（无幽灵气泡）。
+    ///
+    /// 分层单测漏掉这条正是 review P1-1 的根因，故这里用真实 mock 后端跑完整事件流。
+    #[test]
+    fn send_path_has_no_duplicate_user_message_and_no_ghost_stream() {
+        let mut state = AppState::new();
+        let mut backend = MockBackend::new();
+        // 先灌入种子事件（实例/版本/日志快照）
+        for event in backend.drain_events() {
+            state.apply(event);
+        }
+
+        send_agent_message(&mut state, &mut backend, "装哪个版本");
+
+        fn user_count(state: &AppState) -> usize {
+            state
+                .ai
+                .messages
+                .iter()
+                .filter(|message| message.role == ChatRole::User)
+                .count()
+        }
+        assert_eq!(
+            user_count(&state),
+            1,
+            "用户消息必须恰好一条（本地回显会造成两条）"
+        );
+        assert!(state.ai.streaming);
+
+        // 推进到流式收敛（mock 300ms/片 + 工具调用 + 收尾消息）
+        for _ in 0..12 {
+            backend.tick(Duration::from_millis(400));
+            for event in backend.drain_events() {
+                state.apply(event);
+            }
+        }
+
+        assert_eq!(user_count(&state), 1, "事件回流后用户消息仍应只有一条");
+        assert!(
+            state.ai.messages.iter().all(|message| !message.streaming),
+            "所有气泡必须收敛（幽灵气泡会永久 streaming）"
+        );
+        assert!(!state.ai.streaming);
+        assert!(
+            state
+                .ai
+                .messages
+                .iter()
+                .any(|message| message.role == ChatRole::Assistant && !message.text.is_empty()),
+            "增量应累积到 assistant 正文"
+        );
+        assert_eq!(
+            state
+                .ai
+                .messages
+                .iter()
+                .filter(|message| message.role == ChatRole::Assistant)
+                .count(),
+            2,
+            "一轮对话 = 流式回复 + 收尾回复"
+        );
+    }
+}

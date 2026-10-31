@@ -1,0 +1,29 @@
+[package]
+name = "unlucky-app"
+description = "Unlucky-Launcher 桌面壳：Slint + Metro 视觉（唯一允许依赖 UI 框架的 crate）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "unlucky-launcher"
+path = "src/main.rs"
+
+[dependencies]
+slint.workspace = true
+
+# 边界（01c §5 / D3）：app 只经 DTO 消费 core/agent，**不 import 内部类型**。
+# P0 的 host 是 src/mock.rs 的假后端；这两个依赖在这里登记，是为了后续把真实 host
+# （core 的快照/事件流翻译成 src/dto 的类型）落位时不必再动 workspace 契约。
+unlucky-core = { path = "../core", version = "0.1" }
+unlucky-agent = { path = "../agent", version = "0.1" }
+
+[build-dependencies]
+slint-build.workspace = true
+
+[lints]
+workspace = true

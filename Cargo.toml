@@ -1,0 +1,88 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/agent", "crates/app", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["AskaEth <i@yeij.top>"]
+repository = "https://github.com/AskaEth/Unlucky-Launcher"
+rust-version = "1.92"
+publish = false
+
+[workspace.dependencies]
+# 共享依赖（版本在此集中，各 crate 用 `xxx.workspace = true` 引用）
+# M15（core::diagnose）首批使用者：规则正则 / 规则 YAML 解析 / 诊断结果序列化。
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# serde_yaml 上游已停维护（RUSTSEC-2024-0320），改用维护中的 API 兼容分支（tower 定案）
+serde_yaml_ng = "0.10"
+
+# M13（core::download）：HTTP + 异步运行时 + 流 + 校验哈希。
+# rustls（ring）而非 native-tls —— 免 OpenSSL/系统证书栈依赖，MinGW 与 Win7 都省事。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "fs",
+    "io-util",
+    "time",
+    "sync",
+    "net",
+    "macros",
+] }
+futures-util = "0.3"
+sha1 = "0.10"
+sha2 = "0.10"
+# M31（core::auth）：离线账户 UUID 必须与 Minecraft 服务端/HMCL 的
+# `UUID.nameUUIDFromBytes` 逐字节一致 = MD5 + v3 位改写，因此需要 MD5。
+# 与 sha1/sha2 同属 RustCrypto（Apache-2.0 OR MIT），版本对齐 digest 0.10。
+md-5 = "0.10"
+
+# M29（core::launch::natives）：读 natives jar（zip 容器）解压原生库。
+# 只开 inflate（`deflate-flate2-zlib-rs`，纯 Rust zlib）——解压方向不需要 zopfli 压缩器。
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+# M33（core::game::java）：Temurin 的 Linux/macOS 产物只发 `.tar.gz`（Windows 是 `.zip`，
+# 复用上面的 zip）。flate2/tar 都是纯 Rust + MIT OR Apache-2.0，白名单内。
+flate2 = "1"
+tar = "0.4"
+
+# UI 层唯一入口（D2：Slint，RF 2.0 轨道）。
+# 默认特性已含 backend-default + renderer-femtovg（GL）+ renderer-software（CPU 软渲染兜底，
+# Win7 老机无可用 GPU 时的降级路径，见 DevDocs/PlanDoc/01c-native-gui-options.md §6）。
+slint = "1.18"
+# app 的 build script 用（把 ui/main.slint 编译成 Rust 代码），版本必须与 slint 主 crate 同步。
+slint-build = "1.18"
+
+# agent 层依赖（rig / rmcp）按 D4 在 M16 引入，脚手架期不引入以免版本冲突。
+# 版本锁定策略见 DevDocs/PlanDoc/02-ai-agent-design.md §0：rig 锁 =0.45.x，rmcp 3.8.x。
+#
+# M39 的 MCP server（02 §0「传输定论」）：rmcp 官方 SDK（Apache-2.0），**锁精确版本**——
+# pre-1.0 且 ~6 天一个版、3.x 内已多次改 server API。只开需要的传输 feature：
+# - `server`（default 带）+ `transport-io`（stdio，给 llama.cpp 内置 MCP client）
+# - `transport-streamable-http-server`（主力：127.0.0.1 上的 Streamable HTTP）
+# `macros` 一并留在 default 里（`#[tool]` 宏不用，但 default 拆开易漏 base64 等隐式依赖）。
+rmcp = { version = "=3.8.0", features = [
+    "transport-io",
+    "transport-streamable-http-server",
+] }
+# rmcp 的 Streamable HTTP server 是个 tower Service，官方示例用 axum 挂监听（MIT）。
+# 只吃 `nest_service` + `serve`，不引入任何 TLS/模板/DB 生态。
+axum = "0.8"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

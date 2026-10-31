@@ -1,0 +1,169 @@
+{
+  "version": 3,
+  "notes": [
+    "v3（D23/M36）：adoptium 表收敛到清华 TUNA 一家（其余院校实测 404，登记保留但 enabled=false）；新增 oracle_openjdk / microsoft_openjdk / zulu 三张表，供 game::java 的三发行版回退链使用。",
+    "华为云 / 腾讯云 / 阿里云没有 Adoptium 镜像：华为云门户对任意不存在的路径都回 200 + 12KB HTML（假阳性，M34 实测），腾讯云 /v1/source.js 与华为云 /v1/repositories 的权威清单里都没有 JDK 项。据此不再登记 adoptium.huaweicloud。",
+    "oracle_openjdk 的目录与文件名与 download.java.net 完全同构，但 hash 段（f2283984656d49d69e91c558476027ac）不可推导——候选 URL 只能来自对镜像目录页的解析，禁止拼装。",
+    "microsoft_openjdk 没有国内镜像，也没有 GitHub 资产（api.github.com 的 microsoft/openjdk releases 里 assets 全空）；唯一渠道是 aka.ms 模板 301 → download.visualstudio.microsoft.com（国内约 400 KB/s）。",
+    "zulu 的 API size 字段与真实字节数差 133 B，只能用于展示；校验一律用 sha256_hash。"
+  ],
+  "gh_proxies": [
+    {
+      "id": "gh-proxy",
+      "name": "gh-proxy.com",
+      "prefix": "https://gh-proxy.com/",
+      "enabled": true
+    }
+  ],
+  "adoptium": [
+    {
+      "id": "tuna",
+      "name": "清华 TUNA",
+      "base": "https://mirrors.tuna.tsinghua.edu.cn/Adoptium",
+      "enabled": true,
+      "latest_only": true
+    },
+    {
+      "id": "ustc",
+      "name": "中科大 USTC（无 Adoptium 目录树：只有 deb/rpm/releases，实测 404）",
+      "base": "https://mirrors.ustc.edu.cn/adoptium",
+      "enabled": false
+    },
+    {
+      "id": "sjtu",
+      "name": "上交 SJTU（无 Adoptium 目录树，实测 404）",
+      "base": "https://mirror.sjtu.edu.cn/adoptium",
+      "enabled": false
+    },
+    {
+      "id": "bfsu",
+      "name": "北外 BFSU（无 Adoptium 目录树，实测 404）",
+      "base": "https://mirrors.bfsu.edu.cn/Adoptium",
+      "enabled": false
+    },
+    {
+      "id": "nju",
+      "name": "南大 NJU（adoptium 路径实测 404；/openjdk/ 走 oracle_openjdk 表）",
+      "base": "https://mirror.nju.edu.cn/adoptium",
+      "enabled": false
+    },
+    {
+      "id": "zju",
+      "name": "浙大 ZJU（无 Adoptium 目录树，实测 404 搜索页）",
+      "base": "https://mirrors.zju.edu.cn/adoptium",
+      "enabled": false
+    },
+    {
+      "id": "163",
+      "name": "网易 163（无 Adoptium 目录树，实测 404 且 18 秒才回）",
+      "base": "https://mirrors.163.com/adoptium",
+      "enabled": false
+    }
+  ],
+  "oracle_openjdk": [
+    {
+      "id": "huawei",
+      "name": "华为云",
+      "base": "https://mirrors.huaweicloud.com/openjdk",
+      "enabled": true,
+      "speed": "11.5MB/s",
+      "note": "逐字节忠实镜像（21.0.2 = 201328186 B 与官方一致）；目录页是 Apache 列表，带 <pre>；归档旁有 .sha256"
+    },
+    {
+      "id": "nju",
+      "name": "南大 NJU",
+      "base": "https://mirror.nju.edu.cn/openjdk",
+      "enabled": true,
+      "speed": "8.3MB/s",
+      "note": "需先吃一次 bcheck cookie（裸 GET 是 302 回自己）；健康度会把它排在华为云之后，失败即降级"
+    }
+  ],
+  "microsoft_openjdk": {
+    "list": "https://learn.microsoft.com/java/openjdk/download",
+    "template": "https://aka.ms/download-jdk/microsoft-jdk-{version}-{os}-{arch}.zip",
+    "sha256_template": "https://aka.ms/download-jdk/microsoft-jdk-{version}-{os}-{arch}.zip.sha256sum.txt",
+    "majors": [25, 21, 17, 11],
+    "domestic_mirrors": [],
+    "measured_speed": "398KB/s"
+  },
+  "zulu": {
+    "api": "https://api.azul.com/metadata/v1/zulu/packages/",
+    "detail": "https://api.azul.com/metadata/v1/zulu/packages/{uuid}",
+    "cdn_host": "cdn.azul.com",
+    "measured_speed": "3.3MB/s",
+    "size_field_reliable": false
+  },
+  "rules": [
+    {
+      "id": "bmclapi-launchermeta",
+      "from": "https://launchermeta.mojang.com",
+      "to": "https://bmclapi2.bangbang93.com"
+    },
+    {
+      "id": "bmclapi-piston-meta",
+      "from": "https://piston-meta.mojang.com",
+      "to": "https://bmclapi2.bangbang93.com"
+    },
+    {
+      "id": "bmclapi-piston-data",
+      "from": "https://piston-data.mojang.com",
+      "to": "https://bmclapi2.bangbang93.com"
+    },
+    {
+      "id": "bmclapi-launcher",
+      "from": "https://launcher.mojang.com",
+      "to": "https://bmclapi2.bangbang93.com"
+    },
+    {
+      "id": "bmclapi-libraries",
+      "from": "https://libraries.minecraft.net",
+      "to": "https://bmclapi2.bangbang93.com"
+    },
+    {
+      "id": "bmclapi-assets-objects",
+      "from": "https://resources.download.minecraft.net",
+      "to": "https://bmclapi2.bangbang93.com",
+      "inject": "/assets"
+    },
+    {
+      "id": "bmclapi-forge-maven",
+      "from": "https://files.minecraftforge.net/maven",
+      "to": "https://bmclapi2.bangbang93.com/maven"
+    },
+    {
+      "id": "bmclapi-forge-maven-net",
+      "from": "https://maven.minecraftforge.net",
+      "to": "https://bmclapi2.bangbang93.com/maven"
+    },
+    {
+      "id": "bmclapi-neoforge",
+      "from": "https://maven.neoforged.net/releases",
+      "to": "https://bmclapi2.bangbang93.com/maven"
+    },
+    {
+      "id": "bmclapi-fabric-meta",
+      "from": "https://meta.fabricmc.net",
+      "to": "https://bmclapi2.bangbang93.com/fabric-meta"
+    },
+    {
+      "id": "bmclapi-fabric-maven",
+      "from": "https://maven.fabricmc.net",
+      "to": "https://bmclapi2.bangbang93.com/maven"
+    },
+    {
+      "id": "bmclapi-quilt-meta",
+      "from": "https://meta.quiltmc.org",
+      "to": "https://bmclapi2.bangbang93.com/quilt-meta"
+    },
+    {
+      "id": "bmclapi-liteloader",
+      "from": "https://dl.liteloader.com/versions",
+      "to": "https://bmclapi2.bangbang93.com/maven"
+    },
+    {
+      "id": "bmclapi-authlib-injector",
+      "from": "https://authlib-injector.yushi.moe",
+      "to": "https://bmclapi2.bangbang93.com/mirrors/authlib-injector"
+    }
+  ]
+}

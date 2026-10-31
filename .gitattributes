@@ -1,0 +1,34 @@
+# 换行策略：仓库内一律 LF（rustfmt 设 newline_style = "Unix"，CI 在 Linux 上跑 fmt --check）。
+# eol=lf 对工作区同样生效 —— Windows 克隆也不会被转换成 CRLF，避免「本地 fmt 过、CI fmt 挂」。
+* text=auto eol=lf
+
+# 明确为文本（显式列出，防止被误判成二进制）
+*.rs       text eol=lf
+*.toml     text eol=lf
+*.md       text eol=lf
+*.slint    text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.json     text eol=lf
+Cargo.lock text eol=lf
+
+# 二进制：不做换行转换、不做文本 diff
+*.png   binary
+*.ico   binary
+*.icns  binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.zip   binary
+*.7z    binary
+*.gz    binary
+*.tar   binary
+*.exe   binary
+*.dll   binary
+*.lib   binary
+*.pdb   binary

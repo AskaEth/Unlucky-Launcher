@@ -1,0 +1,373 @@
+// 主窗口框架（D16 §1）：无边框标题栏 + 左侧可折叠导航 + 内容区路由 + 右侧 AI 常驻栏 + 对话框/Toast 覆盖层。
+// 这里只做「组装 + 路由转发」，状态全在 Rust 侧（state.rs），Slint 不持有业务真相。
+// main.slint（阶段 B 接线）只负责实例化 AppShell 并把 Window 的窗口事件接上。
+import { Theme } from "theme/tokens.slint";
+import { Metrics } from "theme/metrics.slint";
+import {
+    RouteKind, TileSize, InstanceView, SettingSection, DownloadCategory, ThemeMode, BgFillKind,
+    UiTile, UiVersion, UiLogSession, UiLogLine, UiDiagnosis, UiChatMessage, UiDialog, UiToast,
+} from "models.slint";
+import { TitleBar } from "components/titlebar.slint";
+import { Nav } from "components/nav.slint";
+import { AiPanel } from "components/ai-panel.slint";
+import { UiText, TextRole } from "components/label.slint";
+import { MetroButton, ButtonKind } from "widgets/button.slint";
+import { DialogHost } from "widgets/dialog.slint";
+import { ToastHost } from "widgets/toast.slint";
+import { InstancesPage } from "pages/instances.slint";
+import { DownloadPage } from "pages/download.slint";
+import { LogsPage } from "pages/logs.slint";
+import { SettingsPage } from "pages/settings.slint";
+
+export component AppShell inherits Rectangle {
+    // ── 窗口 ────────────────────────────────────────────────────
+    in property <string> app-title: "Unlucky Launcher";
+    in property <bool> maximized: false;
+
+    // ── 路由 ────────────────────────────────────────────────────
+    in property <RouteKind> route: RouteKind.instances;
+
+    // ── 导航 / 账户 ──────────────────────────────────────────────
+    in property <bool> nav-collapsed: false;
+    in property <string> account-name: "未登录";
+    in property <string> account-initial: "?";
+    in property <color> account-hue: #5C2D91;
+
+    // ── AI 栏（双形态共享同一份会话）──────────────────────────────
+    in property <bool> ai-collapsed: false;
+    in property <[UiChatMessage]> ai-messages;
+    in property <bool> ai-streaming: false;
+    in property <bool> yolo: false;
+    in property <string> ai-endpoint-label: "llama.cpp · 本地";
+    in-out property <string> ai-draft: "";
+
+    // ── 页面数据 ────────────────────────────────────────────────
+    in property <[UiTile]> tiles;
+    in property <[UiTile]> running-tiles;
+    in property <[UiVersion]> versions;
+    in property <[UiLogSession]> log-sessions;
+    in property <[UiLogLine]> log-lines;
+    in property <UiDiagnosis> diagnosis;
+    in property <bool> has-diagnosis: false;
+    in property <string> selected-session: "";
+
+    // ── 偏好（持久化键见 SubAgentsTalk/app-DTO通道约定.md）──────────
+    in-out property <TileSize> tile-size: TileSize.medium;
+    in-out property <InstanceView> instance-view: InstanceView.tiles;
+    in-out property <string> instance-query: "";
+    in-out property <SettingSection> settings-section: SettingSection.general;
+    /// D17 主题三态（auto 跟随系统；light/dark 钉死）。Rust 侧同时写 Theme 全局。
+    in-out property <ThemeMode> theme-mode: ThemeMode.auto;
+    /// 外观（高级）四件的 in-out 通道：MainWindow ↔ SettingsPage（图片本身走 `Theme.bg-image`）
+    in-out property <bool> bg-image-enabled: false;
+    in-out property <string> bg-image: "";
+    in-out property <BgFillKind> bg-fill: BgFillKind.cover;
+    in-out property <float> bg-dim: 0.35;
+    in-out property <float> panel-alpha: 1.0;
+    in-out property <bool> glass: false;
+    /// 设置页编辑的十六进制串（`accent-color` 是解析后的颜色，只给 Theme 用）
+    in-out property <string> accent-hex: "";
+    /// 强调色输入是否非法（设置页亮 warn 行）
+    in-out property <bool> accent-invalid: false;
+    in-out property <DownloadCategory> download-category: DownloadCategory.release;
+    in-out property <bool> download-installed-only: false;
+    /// 下载页版本号筛选词（输入由页面写回，state.download_query 参与过滤）
+    in-out property <string> download-query: "";
+
+    // ── 对话框队列 / Toast ───────────────────────────────────────
+    in property <UiDialog> dialog;
+    in property <bool> dialog-open: false;
+    in property <int> dialog-queued: 0;
+    in property <[UiToast]> toasts;
+
+    // ── 窗口控制（拖拽走 WindowMoveArea，不需要 Rust 参与）────────
+    callback toggle-maximize();
+    callback minimize();
+    callback request-close();
+
+    // ── 导航 / AI ───────────────────────────────────────────────
+    callback navigate(RouteKind);
+    callback toggle-nav();
+    callback toggle-ai();
+    callback expand-ai();
+    callback dock-ai();
+    callback toggle-yolo();
+    callback ai-send(string);
+    callback ai-stop();
+
+    // ── 实例页 ──────────────────────────────────────────────────
+    callback instance-launch(string);
+    callback instance-configure(string);
+    callback instance-stop(string);
+    callback instance-open(string);
+    callback new-instance();
+    callback instance-view-changed(InstanceView);
+    callback tile-size-changed(TileSize);
+    callback instance-query-changed(string);
+
+    // ── 下载页 ──────────────────────────────────────────────────
+    callback download-category-changed(DownloadCategory);
+    callback download-install(string);
+    callback installed-only-changed(bool);
+    callback download-query-changed(string);
+    callback ancient-help();
+
+    // ── 日志页 ──────────────────────────────────────────────────
+    callback log-select(string);
+    callback log-ask-ai(string);
+    callback log-apply-fix();
+
+    // ── 设置页 ──────────────────────────────────────────────────
+    callback settings-section-changed(SettingSection);
+    callback theme-changed(ThemeMode);
+    callback bg-image-enabled-changed(bool);
+    callback bg-image-changed(string);
+    callback bg-fill-changed(BgFillKind);
+    callback bg-dim-changed(float);
+    callback panel-alpha-changed(float);
+    callback glass-changed(bool);
+    callback accent-color-changed(string);
+    callback accent-swatch-picked(int);
+    callback yolo-changed(bool);
+    callback mcp-changed(bool);
+    callback ai-endpoint-changed(int);
+
+    // ── 对话框 / Toast ──────────────────────────────────────────
+    callback dialog-primary();
+    callback dialog-secondary();
+    callback dialog-dismissed();
+    callback toast-dismissed(string);
+
+    // 窗口底色交给 main.slint 的 Window（不透明 `canvas-solid`），这里只铺背景图层
+    background: transparent;
+
+    // 玻璃拟态的对齐基准：整窗逻辑尺寸（components/glass.slint 反向偏移用）
+    init => {
+        Theme.window-width = root.width;
+        Theme.window-height = root.height;
+    }
+    changed width => { Theme.window-width = root.width; }
+    changed height => { Theme.window-height = root.height; }
+
+    // ── ① 自定义窗口背景图（09 §101）────────────────────────────
+    // 只在「开关打开且图片已加载」时才画：空 image 的 width 为 0，出厂态零开销。
+    if Theme.bg-image.width > 0 : Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        clip: true;
+        background: Theme.canvas-solid;
+
+        Image {
+            source: Theme.bg-image;
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            // tile 模式由 Rust 预平铺成整窗画布，故这里等同 cover
+            image-fit: root.bg-fill == BgFillKind.contain ? contain : cover;
+        }
+    }
+
+    // ── ② 暗化层（09 §111：保证前景可读；0 = 不压暗）─────────────
+    if Theme.bg-image.width > 0 && Theme.bg-dim > 0 : Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: rgba(0, 0, 0, Theme.bg-dim);
+    }
+
+    VerticalLayout {
+        TitleBar {
+            title: root.app-title;
+            subtitle: "P0 骨架 · Metro";
+            maximized: root.maximized;
+            toggle-maximize => { root.toggle-maximize(); }
+            minimize => { root.minimize(); }
+            request-close => { root.request-close(); }
+        }
+
+        HorizontalLayout {
+            // 左侧主导航
+            Nav {
+                active: root.route;
+                collapsed: root.nav-collapsed;
+                account-name: root.account-name;
+                account-initial: root.account-initial;
+                account-hue: root.account-hue;
+                navigate(r) => { root.navigate(r); }
+                toggle-collapsed => { root.toggle-nav(); }
+                account-clicked => { root.navigate(RouteKind.settings); root.settings-section-changed(SettingSection.account); }
+            }
+
+            // 内容区（每页独立滚动，路由切换栈语义在 Rust Router）
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Theme.bg-canvas;
+
+                if root.route == RouteKind.instances : InstancesPage {
+                    tiles: root.tiles;
+                    running: root.running-tiles;
+                    view: root.instance-view;
+                    tile-size: root.tile-size;
+                    query: root.instance-query;
+                    launch(id) => { root.instance-launch(id); }
+                    configure(id) => { root.instance-configure(id); }
+                    stop(id) => { root.instance-stop(id); }
+                    open(id) => { root.instance-open(id); }
+                    new-instance => { root.new-instance(); }
+                    view-changed(v) => {
+                        root.instance-view = v;
+                        root.instance-view-changed(v);
+                    }
+                    tile-size-changed(s) => {
+                        root.tile-size = s;
+                        root.tile-size-changed(s);
+                    }
+                    query-changed(q) => { root.instance-query-changed(q); }
+                }
+
+                if root.route == RouteKind.download : DownloadPage {
+                    versions: root.versions;
+                    category: root.download-category;
+                    installed-only: root.download-installed-only;
+                    query: root.download-query;
+                    install(id) => { root.download-install(id); }
+                    query-changed(q) => {
+                        root.download-query = q;
+                        root.download-query-changed(q);
+                    }
+                    ancient-help => { root.ancient-help(); }
+                    category-changed(c) => {
+                        root.download-category = c;
+                        root.download-category-changed(c);
+                    }
+                    installed-only-changed(v) => {
+                        root.download-installed-only = v;
+                        root.installed-only-changed(v);
+                    }
+                }
+
+                if root.route == RouteKind.logs : LogsPage {
+                    sessions: root.log-sessions;
+                    lines: root.log-lines;
+                    diagnosis: root.diagnosis;
+                    has-diagnosis: root.has-diagnosis;
+                    selected: root.selected-session;
+                    select(id) => { root.log-select(id); }
+                    ask-ai(id) => { root.log-ask-ai(id); }
+                    apply-fix => { root.log-apply-fix(); }
+                }
+
+                if root.route == RouteKind.settings : SettingsPage {
+                    section: root.settings-section;
+                    theme-mode: root.theme-mode;
+                    bg-image-enabled: root.bg-image-enabled;
+                    bg-image: root.bg-image;
+                    bg-fill: root.bg-fill;
+                    bg-dim: root.bg-dim;
+                    panel-alpha: root.panel-alpha;
+                    glass: root.glass;
+                    accent-color: root.accent-hex;
+                    accent-invalid: root.accent-invalid;
+                    section-changed(s) => {
+                        root.settings-section = s;
+                        root.settings-section-changed(s);
+                    }
+                    theme-changed(mode) => {
+                        root.theme-mode = mode;
+                        root.theme-changed(mode);
+                    }
+                    bg-image-enabled-changed(v) => { root.bg-image-enabled-changed(v); }
+                    bg-image-changed(path) => { root.bg-image-changed(path); }
+                    bg-fill-changed(fill) => { root.bg-fill-changed(fill); }
+                    bg-dim-changed(v) => { root.bg-dim-changed(v); }
+                    panel-alpha-changed(v) => { root.panel-alpha-changed(v); }
+                    glass-changed(v) => { root.glass-changed(v); }
+                    accent-color-changed(text) => {
+                        root.accent-hex = text;
+                        root.accent-color-changed(text);
+                    }
+                    accent-swatch-picked(index) => { root.accent-swatch-picked(index); }
+                    yolo-changed(v) => { root.yolo-changed(v); }
+                    mcp-changed(v) => { root.mcp-changed(v); }
+                    ai-endpoint-changed(i) => { root.ai-endpoint-changed(i); }
+                }
+
+                // AI 拆成独立全宽页：与右侧栏共用同一份 ai-messages（切换无损）
+                if root.route == RouteKind.agent : AiPanel {
+                    docked: false;
+                    messages: root.ai-messages;
+                    collapsed: false;
+                    yolo: root.yolo;
+                    streaming: root.ai-streaming;
+                    endpoint-label: root.ai-endpoint-label;
+                    draft <=> root.ai-draft;
+                    dock => { root.dock-ai(); }
+                    toggle-yolo => { root.toggle-yolo(); }
+                    send(t) => { root.ai-send(t); }
+                    stop => { root.ai-stop(); }
+                }
+
+                // 实例详情 G4：P0 只留占位（点击磁贴进入）
+                if root.route == RouteKind.detail : VerticalLayout {
+                    alignment: center;
+                    spacing: Metrics.gap-3;
+
+                    UiText {
+                        role: TextRole.title;
+                        text: "实例详情（G4）";
+                        horizontal-alignment: center;
+                    }
+                    UiText {
+                        role: TextRole.caption;
+                        text: "P0 骨架未实现：概要与设置 tab 在 G4 补齐";
+                        horizontal-alignment: center;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        MetroButton {
+                            kind: ButtonKind.standard;
+                            text: "返回实例页";
+                            clicked => { root.navigate(RouteKind.instances); }
+                        }
+                    }
+                }
+            }
+
+            // 右侧 AI 常驻栏（拆成独立页时让位给内容区）
+            AiPanel {
+                visible: root.route != RouteKind.agent;
+                docked: true;
+                collapsed: root.ai-collapsed;
+                messages: root.ai-messages;
+                yolo: root.yolo;
+                streaming: root.ai-streaming;
+                endpoint-label: root.ai-endpoint-label;
+                draft <=> root.ai-draft;
+                toggle-collapsed => { root.toggle-ai(); }
+                expand => { root.expand-ai(); }
+                toggle-yolo => { root.toggle-yolo(); }
+                send(t) => { root.ai-send(t); }
+                stop => { root.ai-stop(); }
+            }
+        }
+    }
+
+    // 覆盖层：模态队列（一次一条）+ 右下 Toast
+    DialogHost {
+        current: root.dialog;
+        open: root.dialog-open;
+        queued: root.dialog-queued;
+        primary => { root.dialog-primary(); }
+        secondary => { root.dialog-secondary(); }
+        dismissed => { root.dialog-dismissed(); }
+    }
+
+    ToastHost {
+        toasts: root.toasts;
+        dismissed(id) => { root.toast-dismissed(id); }
+    }
+}

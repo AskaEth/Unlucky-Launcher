@@ -1,0 +1,81 @@
+name: Guards
+
+# 架构与合规守门（与 fmt/clippy 同级，不允许 continue-on-error）：
+#   1. core-no-ui  —— crates/core 零 UI 依赖（D3 铁律），依赖表 + cargo tree 双查
+#   2. file-size   —— 全仓代码/文档单文件 ≤400 行（用户硬约束）
+#   3. licenses    —— cargo-deny：许可证白名单 + GPL 依赖拦截 + 供应链来源校验
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core-no-ui:
+    name: core 零 UI 守门
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 依赖表直查（crates/core/Cargo.toml 不得出现 UI 框架）
+        run: |
+          set -uo pipefail
+          forbidden='slint|egui|eframe|iced|winit|gtk|javafx|tauri|fltk|druid|relm'
+          # 只看非注释行：manifest 里说明「不许出现 slint」的注释本身不该触发守门
+          if grep -vE '^[[:space:]]*#' crates/core/Cargo.toml | grep -nEi "$forbidden"; then
+            echo "::error file=crates/core/Cargo.toml::core 不得依赖 UI 框架（见 AGENTS.md 硬约束）"
+            exit 1
+          fi
+          echo "OK: crates/core/Cargo.toml 无 UI 依赖"
+      - name: 依赖树泄漏检查（cargo tree -p unlucky-core，排除自身行）
+        run: |
+          set -uo pipefail
+          forbidden='slint|egui|eframe|iced|winit|gtk|javafx|tauri|fltk|druid|relm'
+          tree=$(cargo tree -p unlucky-core --edges normal --prefix none)
+          echo "$tree"
+          if echo "$tree" | grep -vE '^unlucky-core v' | grep -qiE "$forbidden"; then
+            echo "::error::core 的依赖树出现 UI 框架 —— 传递依赖也不允许"
+            exit 1
+          fi
+          echo "OK: unlucky-core 依赖树零 UI"
+
+  file-size:
+    name: 文件行数 ≤400 守门
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 检查单文件行数
+        run: |
+          set -uo pipefail
+          LIMIT=400
+          failed=0
+          while IFS= read -r f; do
+            case "$f" in
+              LICENSE|*/LICENSE|LICENSE-*|*/LICENSE-*) continue ;;
+              CHANGELOG*|*/CHANGELOG*) continue ;;
+            esac
+            n=$(wc -l < "$f")
+            if [ "$n" -gt "$LIMIT" ]; then
+              echo "::error file=$f::$f 有 $n 行，超过 $LIMIT 行上限，请按模块拆分"
+              failed=$((failed + 1))
+            fi
+          done < <(git ls-files '*.rs' '*.md' '*.slint' '*.yml' '*.yaml' '*.toml' '*.json')
+          if [ "$failed" -ne 0 ]; then
+            echo "共 $failed 个文件超限"
+            exit 1
+          fi
+          echo "OK: 全部受检文件 ≤$LIMIT 行"
+
+  licenses:
+    name: 依赖许可与来源（cargo-deny）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # 只跑许可/禁用/来源三类，advisories 由后续安全轮次单独接管
+          command: check licenses bans sources

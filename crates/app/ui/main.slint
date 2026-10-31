@@ -1,0 +1,303 @@
+// Unlucky-Launcher · 主入口窗口（P0 阶段 B 接线）
+//
+// 布局真相源：DevDocs/PlanDoc/09-ui-layout.md（D16：左侧固定导航 + 右侧 AI 常驻栏 + 磁贴实例页）。
+// 本文件只做三件事：①无边框窗口与字体/缩放口径 ②实例化 `AppShell` ③把 AppShell 的全部
+// 属性/回调原样上抛给 src/main.rs（Slint 只能从根组件访问属性与回调，所以这层转发是必需的）。
+//
+// 与 M11 骨架的关系：M11 的 `Metro` palette global（accent/surface/sidebar/tile/text/muted/pad/gap）
+// 已由 `theme/tokens.slint` 的 `Theme` 继承并扩展——同一「palette global 令牌化」思路，但多了
+// 亮/暗双套色板（LightPalette/DarkPalette）、主题三态解析、排版 ramp 与字体栈；M11 的占位
+// NavItem/Tile 组件由 `components/nav.slint` 与 `components/tile.slint` 取代，占位内核不再保留。
+
+import { AppShell } from "shell.slint";
+import { Theme } from "theme/tokens.slint";
+import { Metrics } from "theme/metrics.slint";
+import {
+    RouteKind, TileSize, InstanceView, SettingSection, DownloadCategory, ThemeMode, BgFillKind,
+    UiTile, UiVersion, UiLogSession, UiLogLine, UiDiagnosis, UiChatMessage, UiDialog, UiToast,
+} from "models.slint";
+
+export component MainWindow inherits Window {
+    title: root.app-title;
+    // 默认尺寸取 D16 线框口径；最小尺寸保证 5 列磁贴 + 导航 + AI 栏不挤压
+    width: 1180px;
+    height: 760px;
+    // Metro 一体感：自绘标题栏（components/titlebar.slint）
+    no-frame: true;
+    // 无边框窗口必须显式给边缘缩放热区，否则用户无法拖拽改窗口大小
+    resize-border-width: 4px;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-size-body;
+    // 窗口自身底色必须**不透明**：面板半透明度（panel-alpha）只该透出背景图，不该透到桌面
+    background: Theme.canvas-solid;
+
+    // ── 从 main.rs 灌入的状态 ───────────────────────────────────
+    in-out property <string> app-title: "Unlucky Launcher";
+    in property <RouteKind> route: RouteKind.instances;
+
+    in property <bool> nav-collapsed: false;
+    in property <string> account-name: "未登录";
+    in property <string> account-initial: "?";
+    in property <color> account-hue: #5C2D91;
+
+    in-out property <bool> ai-collapsed: false;
+    in property <[UiChatMessage]> ai-messages;
+    in property <bool> ai-streaming: false;
+    in-out property <bool> yolo: false;
+    in property <string> ai-endpoint-label: "llama.cpp · 本地";
+    in-out property <string> ai-draft: "";
+
+    in property <[UiTile]> tiles;
+    in property <[UiTile]> running-tiles;
+    in property <[UiVersion]> versions;
+    in property <[UiLogSession]> log-sessions;
+    in property <[UiLogLine]> log-lines;
+    in property <UiDiagnosis> diagnosis;
+    in property <bool> has-diagnosis: false;
+    in property <string> selected-session: "";
+
+    in-out property <TileSize> tile-size: TileSize.medium;
+    in-out property <InstanceView> instance-view: InstanceView.tiles;
+    in-out property <string> instance-query: "";
+    in-out property <SettingSection> settings-section: SettingSection.general;
+    in-out property <ThemeMode> theme-mode: ThemeMode.auto;
+    // 系统主题（M41）：0 = 未知（回落 Slint 后端），1 = 浅色，2 = 深色
+    in property <int> system-theme: 0;
+    /// 后端是否认得系统主题（`false` 时 Rust 侧才需要轮询探测兜底）
+    out property <bool> system-theme-known: Theme.system-theme-known;
+
+    // ── 外观（高级）P1 四件（09 §101-104，出厂全部关闭）──────────────
+    // 图片由 Rust 灌入（`in`）；其余是 in-out：设置页控件会写回，回调里再原样上抛给 Rust。
+    in property <image> background-image;
+    in property <image> background-blur;
+    in-out property <bool> bg-image-enabled: false;
+    in-out property <string> bg-image: "";
+    in-out property <BgFillKind> bg-fill: BgFillKind.cover;
+    in-out property <float> bg-dim: 0.35;
+    in-out property <float> panel-alpha: 1.0;
+    in-out property <bool> glass: false;
+    in-out property <color> accent-color: transparent;
+    /// 设置页「强调色（十六进制）」输入框的内容（Rust 写入规范化后的值）
+    in-out property <string> accent-hex: "";
+    /// 强调色输入是否非法（设置页亮 warn 行）
+    in-out property <bool> accent-invalid: false;
+    in-out property <DownloadCategory> download-category: DownloadCategory.release;
+    in-out property <bool> download-installed-only: false;
+    in-out property <string> download-query: "";
+
+    in property <UiDialog> dialog;
+    in property <bool> dialog-open: false;
+    in property <int> dialog-queued: 0;
+    in property <[UiToast]> toasts;
+
+    // 主题/外观：handler 里整体赋值给 `Theme` 全局（Slint 不允许在组件体内给全局属性做绑定，
+    // 但允许在回调/init 里赋值）。auto 分支由 Theme 自己读系统的 Palette.color-scheme。
+    init => {
+        Theme.theme-mode = root.theme-mode;
+        Theme.system-theme = root.system-theme;
+        Theme.bg-image = root.background-image;
+        Theme.bg-blur = root.background-blur;
+        Theme.bg-dim = root.bg-dim;
+        Theme.panel-alpha = root.panel-alpha;
+        Theme.glass = root.glass;
+        Theme.accent-override = root.accent-color;
+    }
+    changed theme-mode => { Theme.theme-mode = root.theme-mode; }
+    changed system-theme => { Theme.system-theme = root.system-theme; }
+    changed background-image => { Theme.bg-image = root.background-image; }
+    changed background-blur => { Theme.bg-blur = root.background-blur; }
+    changed bg-dim => { Theme.bg-dim = root.bg-dim; }
+    changed panel-alpha => { Theme.panel-alpha = root.panel-alpha; }
+    changed glass => { Theme.glass = root.glass; }
+    changed accent-color => { Theme.accent-override = root.accent-color; }
+
+    // ── 用户操作（main.rs 转成 AppCommand 或纯 UI 偏好）──────────────
+    callback toggle-maximize();
+    callback minimize();
+    callback request-close();
+
+    callback navigate(RouteKind);
+    callback toggle-nav();
+    callback toggle-ai();
+    callback expand-ai();
+    callback dock-ai();
+    callback toggle-yolo();
+    callback ai-send(string);
+    callback ai-stop();
+
+    callback instance-launch(string);
+    callback instance-configure(string);
+    callback instance-stop(string);
+    callback instance-open(string);
+    callback new-instance();
+    callback instance-view-changed(InstanceView);
+    callback tile-size-changed(TileSize);
+    callback instance-query-changed(string);
+
+    callback download-category-changed(DownloadCategory);
+    callback download-install(string);
+    callback installed-only-changed(bool);
+    callback download-query-changed(string);
+    callback ancient-help();
+
+    callback log-select(string);
+    callback log-ask-ai(string);
+    callback log-apply-fix();
+
+    callback settings-section-changed(SettingSection);
+    callback theme-changed(ThemeMode);
+    callback bg-image-enabled-changed(bool);
+    callback bg-image-changed(string);
+    callback bg-fill-changed(BgFillKind);
+    callback bg-dim-changed(float);
+    callback panel-alpha-changed(float);
+    callback glass-changed(bool);
+    callback accent-color-changed(string);
+    callback accent-swatch-picked(int);
+    callback yolo-changed(bool);
+    callback mcp-changed(bool);
+    callback ai-endpoint-changed(int);
+
+    callback dialog-primary();
+    callback dialog-secondary();
+    callback dialog-dismissed();
+    callback toast-dismissed(string);
+
+    AppShell {
+        app-title: root.app-title;
+        // 直接复用 Window 的内建 `maximized`（后端随窗口状态更新，无需自建属性）
+        maximized: root.maximized;
+        route: root.route;
+        nav-collapsed: root.nav-collapsed;
+        account-name: root.account-name;
+        account-initial: root.account-initial;
+        account-hue: root.account-hue;
+        ai-collapsed: root.ai-collapsed;
+        ai-messages: root.ai-messages;
+        ai-streaming: root.ai-streaming;
+        yolo: root.yolo;
+        ai-endpoint-label: root.ai-endpoint-label;
+        ai-draft: root.ai-draft;
+        tiles: root.tiles;
+        running-tiles: root.running-tiles;
+        versions: root.versions;
+        log-sessions: root.log-sessions;
+        log-lines: root.log-lines;
+        diagnosis: root.diagnosis;
+        has-diagnosis: root.has-diagnosis;
+        selected-session: root.selected-session;
+        tile-size: root.tile-size;
+        instance-view: root.instance-view;
+        instance-query: root.instance-query;
+        settings-section: root.settings-section;
+        theme-mode: root.theme-mode;
+        bg-image-enabled: root.bg-image-enabled;
+        bg-image: root.bg-image;
+        bg-fill: root.bg-fill;
+        bg-dim: root.bg-dim;
+        panel-alpha: root.panel-alpha;
+        glass: root.glass;
+        accent-hex: root.accent-hex;
+        accent-invalid: root.accent-invalid;
+        download-category: root.download-category;
+        download-installed-only: root.download-installed-only;
+        download-query: root.download-query;
+        dialog: root.dialog;
+        dialog-open: root.dialog-open;
+        dialog-queued: root.dialog-queued;
+        toasts: root.toasts;
+
+        toggle-maximize => { root.toggle-maximize(); }
+        minimize => { root.minimize(); }
+        request-close => { root.request-close(); }
+
+        navigate(r) => { root.navigate(r); }
+        toggle-nav => { root.toggle-nav(); }
+        toggle-ai => { root.toggle-ai(); }
+        expand-ai => { root.expand-ai(); }
+        dock-ai => { root.dock-ai(); }
+        toggle-yolo => { root.toggle-yolo(); }
+        ai-send(text) => { root.ai-send(text); }
+        ai-stop => { root.ai-stop(); }
+
+        instance-launch(id) => { root.instance-launch(id); }
+        instance-configure(id) => { root.instance-configure(id); }
+        instance-stop(id) => { root.instance-stop(id); }
+        instance-open(id) => { root.instance-open(id); }
+        new-instance => { root.new-instance(); }
+        instance-view-changed(view) => {
+            root.instance-view = view;
+            root.instance-view-changed(view);
+        }
+        tile-size-changed(size) => {
+            root.tile-size = size;
+            root.tile-size-changed(size);
+        }
+        instance-query-changed(query) => { root.instance-query-changed(query); }
+
+        download-category-changed(category) => {
+            root.download-category = category;
+            root.download-category-changed(category);
+        }
+        download-install(id) => { root.download-install(id); }
+        download-query-changed(query) => {
+            root.download-query = query;
+            root.download-query-changed(query);
+        }
+        ancient-help => { root.ancient-help(); }
+        installed-only-changed(only) => {
+            root.download-installed-only = only;
+            root.installed-only-changed(only);
+        }
+
+        log-select(id) => { root.log-select(id); }
+        log-ask-ai(id) => { root.log-ask-ai(id); }
+        log-apply-fix => { root.log-apply-fix(); }
+
+        settings-section-changed(section) => {
+            root.settings-section = section;
+            root.settings-section-changed(section);
+        }
+        theme-changed(mode) => {
+            root.theme-mode = mode;
+            root.theme-changed(mode);
+        }
+        bg-image-enabled-changed(v) => {
+            root.bg-image-enabled = v;
+            root.bg-image-enabled-changed(v);
+        }
+        bg-image-changed(path) => {
+            root.bg-image = path;
+            root.bg-image-changed(path);
+        }
+        bg-fill-changed(fill) => {
+            root.bg-fill = fill;
+            root.bg-fill-changed(fill);
+        }
+        bg-dim-changed(v) => {
+            root.bg-dim = v;
+            root.bg-dim-changed(v);
+        }
+        panel-alpha-changed(v) => {
+            root.panel-alpha = v;
+            root.panel-alpha-changed(v);
+        }
+        glass-changed(v) => {
+            root.glass = v;
+            root.glass-changed(v);
+        }
+        accent-color-changed(text) => {
+            root.accent-hex = text;
+            root.accent-color-changed(text);
+        }
+        accent-swatch-picked(index) => { root.accent-swatch-picked(index); }
+        yolo-changed(enabled) => { root.yolo-changed(enabled); }
+        mcp-changed(enabled) => { root.mcp-changed(enabled); }
+        ai-endpoint-changed(index) => { root.ai-endpoint-changed(index); }
+
+        dialog-primary => { root.dialog-primary(); }
+        dialog-secondary => { root.dialog-secondary(); }
+        dialog-dismissed => { root.dialog-dismissed(); }
+        toast-dismissed(id) => { root.toast-dismissed(id); }
+    }
+}

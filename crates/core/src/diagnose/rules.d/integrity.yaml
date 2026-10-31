@@ -1,0 +1,138 @@
+# 规则库 · 文件与安装完整性（8 条）
+# 移植自 HMCL CrashReportAnalyzer.Rule 的完整性组（analyse/02 §7.3 第 4 组）。
+# 组内约定：通用异常（NoSuchMethodError / NoClassDefFoundError）优先级低，
+# 让「安装不完整 / jar 被解压 / mod 冲突」这类能定位根因的规则通过 suppress 把它们降级为次生结论。
+version: 1
+category: integrity
+rules:
+  - id: integrity.file_changed
+    severity: critical
+    pattern: 'java\.lang\.SecurityException: SHA1 digest error for (?<file>.*)|signer information does not match signer information of other classes in the same package'
+    confidence: 0.85
+    priority: 85
+    cause:
+      key: diagnose.cause.integrity.file_changed
+      summary: '游戏文件被改过（SHA1 校验不一致）：jar 内容与清单哈希对不上'
+      detail: '重新下载/校验该文件；不要手改 jar 里的内容'
+    fix_action:
+      - kind: reinstall
+        component: game_jar
+        path_hint: '{file}'
+    sample: samples/integrity/file_changed.log
+    source: 'HMCL CrashReportAnalyzer.Rule.FILE_CHANGED'
+
+  - id: integrity.no_such_method
+    severity: warning
+    pattern: 'java\.lang\.NoSuchMethodError: (?<class>.*?)'
+    confidence: 0.6
+    priority: 40
+    cause:
+      key: diagnose.cause.integrity.no_such_method
+      summary: 'NoSuchMethodError：加载器/coremod 注入的东西与当前库版本不匹配'
+      detail: '常见于 mod 与游戏版本/Forge 版本不配套；重装加载器或删掉冲突 mod'
+    fix_action:
+      - kind: reinstall
+        component: loader
+        note: '先重装加载器；仍失败再逐个禁用 mod'
+    sample: samples/integrity/no_such_method.log
+    source: 'HMCL CrashReportAnalyzer.Rule.NO_SUCH_METHOD_ERROR'
+
+  - id: integrity.no_class_def_found
+    severity: warning
+    pattern: 'java\.lang\.NoClassDefFoundError: (?<class>.*)'
+    confidence: 0.6
+    priority: 40
+    cause:
+      key: diagnose.cause.integrity.no_class_def_found
+      summary: 'NoClassDefFoundError：缺少类文件（库没下全 / jar 被解压 / mod 不配套）'
+      detail: '先检查 libraries 是否完整，再排查 mods 里的解压目录'
+    fix_action:
+      - kind: reinstall
+        component: libraries
+    sample: samples/integrity/no_class_def_found.log
+    source: 'HMCL CrashReportAnalyzer.Rule.NO_CLASS_DEF_FOUND_ERROR'
+
+  - id: integrity.illegal_access
+    severity: warning
+    pattern: 'java\.lang\.IllegalAccessError: tried to access class (.*?) from class (?<class>.*?)'
+    confidence: 0.55
+    priority: 45
+    cause:
+      key: diagnose.cause.integrity.illegal_access
+      summary: 'IllegalAccessError：某个 coremod 想反射访问别的类的内部成员（在新 JDK 上被封了）'
+    fix_action:
+      - kind: reinstall
+        component: loader
+        note: '或换该 coremod/mod 的兼容版本'
+    sample: samples/integrity/illegal_access.log
+    source: 'HMCL CrashReportAnalyzer.Rule.ILLEGAL_ACCESS_ERROR'
+
+  - id: integrity.file_already_exists
+    severity: warning
+    pattern: 'java\.nio\.file\.FileAlreadyExistsException: (?<file>.*)'
+    confidence: 0.75
+    priority: 60
+    cause:
+      key: diagnose.cause.integrity.file_already_exists
+      summary: '某个 mod 要求一个「不该存在」的文件/目录，导致写入失败'
+      detail: '按提示删掉该文件（通常是玩家手建的空目录/unzip 残留）'
+    fix_action:
+      - kind: reinstall
+        component: mods
+        path_hint: '{file}'
+        note: '按路径删掉多余文件'
+    sample: samples/integrity/file_already_exists.log
+    source: 'HMCL CrashReportAnalyzer.Rule.FILE_ALREADY_EXISTS'
+
+  - id: integrity.mod_files_decompressed
+    severity: critical
+    pattern: '(The directories below appear to be extracted jar files\. Fix this before you continue|Extracted mod jars found, loading will NOT continue)'
+    confidence: 0.95
+    priority: 90
+    suppress:
+      - integrity.no_class_def_found
+      - integrity.no_such_method
+    cause:
+      key: diagnose.cause.integrity.mod_files_decompressed
+      summary: 'mods 目录里有被解压成文件夹的 jar：加载器会直接拒绝启动'
+      detail: '把解压出来的目录删掉，只保留 .jar 文件（很多压缩软件双击就解压了）'
+    fix_action:
+      - kind: reinstall
+        component: mods
+        note: '删掉解压出来的目录'
+    sample: samples/integrity/mod_files_decompressed.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MOD_FILES_ARE_DECOMPRESSED'
+
+  - id: integrity.incomplete_forge
+    severity: critical
+    pattern: '(java\.io\.UncheckedIOException: java\.io\.IOException: Invalid paths argument, contained no existing paths: \[(.*?)(forge-(.*?)-client\.jar|fmlcore-(.*?)\.jar)\]|Failed to find Minecraft resource version (.*?) at (.*?)forge-(.*?)-client\.jar|Cannot find launch target fmlclient, unable to launch|java\.lang\.IllegalStateException: Could not find net/minecraft/client/Minecraft\.class in classloader SecureModuleClassLoader)'
+    confidence: 0.9
+    priority: 88
+    suppress:
+      - integrity.no_class_def_found
+      - integrity.no_such_method
+    cause:
+      key: diagnose.cause.integrity.incomplete_forge
+      summary: 'Forge 安装不完整（缺 forge-*-client.jar / fmlcore）'
+      detail: '重装该版本的 Forge，并检查 libraries 是否下全'
+    fix_action:
+      - kind: reinstall
+        component: forge
+    sample: samples/integrity/incomplete_forge.log
+    source: 'HMCL CrashReportAnalyzer.Rule.INCOMPLETE_FORGE_INSTALLATION'
+
+  - id: integrity.unsatisfied_link
+    severity: critical
+    pattern: 'java\.lang\.UnsatisfiedLinkError: Failed to locate library: (?<name>.*)'
+    confidence: 0.85
+    priority: 82
+    cause:
+      key: diagnose.cause.integrity.unsatisfied_link
+      summary: '找不到原生库（natives）：{name} 没解压出来或被杀软删了'
+      detail: '重装组件（重新解压 natives）；Windows 上检查杀软隔离区'
+    fix_action:
+      - kind: reinstall
+        component: natives
+        path_hint: '{name}'
+    sample: samples/integrity/unsatisfied_link.log
+    source: 'HMCL CrashReportAnalyzer.Rule.UNSATISFIED_LINK_ERROR'
