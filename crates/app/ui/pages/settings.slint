@@ -8,6 +8,9 @@ import { SettingSection, TileSize, ThemeMode, BgFillKind } from "../models.slint
 import { UiText, TextRole } from "../components/label.slint";
 import { SettingItem, SettingGroup, ControlKind } from "../widgets/setting-item.slint";
 import { AppearanceSection } from "settings-appearance.slint";
+import { AccountSection } from "settings-account.slint";
+import { SettingsGroups } from "settings-groups.slint";
+import { PageState } from "../page_state.slint";
 import { SearchField } from "../widgets/inputs.slint";
 import { AboutSlint, ScrollView } from "std-widgets.slint";
 
@@ -235,101 +238,15 @@ export component SettingsPage inherits Rectangle {
                         toggled(v) => { root.close-to-tray-changed(v); }
                     }
 
-                    // ── 数据 ────────────────────────────────────────
-                    if root.section == SettingSection.data : SettingGroup { title: "数据目录（D6 三模式）"; }
-                    if root.section == SettingSection.data : SettingItem {
-                        label: "存储模式";
-                        description: "便携（运行目录 .ULL/.minecraft）/ 标准（系统应用数据目录）/ 自定义";
-                        kind: ControlKind.segmented;
-                        options: ["便携", "标准", "自定义"];
-                        selected: root.data-mode;
-                        changed(i) => {
-                            root.data-mode = i;
-                            root.data-mode-changed(i);
-                        }
-                    }
-                    if root.section == SettingSection.data : SettingItem {
-                        label: "当前路径";
-                        description: root.data-path;
-                        kind: ControlKind.button;
-                        button-text: "迁移…";
-                        clicked => { root.migrate-data(); }
-                    }
-
-                    // ── 下载 ────────────────────────────────────────
-                    if root.section == SettingSection.download : SettingGroup { title: "下载（D7）"; }
-                    if root.section == SettingSection.download : SettingItem {
-                        label: "并发数";
-                        kind: ControlKind.segmented;
-                        options: ["4", "8", "16"];
-                        selected: root.download-concurrency;
-                        changed(i) => {
-                            root.download-concurrency = i;
-                            root.download-concurrency-changed(i);
-                        }
-                    }
-                    if root.section == SettingSection.download : SettingItem {
-                        label: "地区判定";
-                        description: "当前：" + root.region-label + "（决定是否走国内镜像）";
-                        kind: ControlKind.button;
-                        button-text: "重新检测";
-                        clicked => { root.detect-region(); }
-                    }
-
-                    // ── Java ────────────────────────────────────────
-                    if root.section == SettingSection.java : SettingGroup { title: "Java（D13）"; }
-                    if root.section == SettingSection.java : SettingItem {
-                        label: "Java 管理";
-                        description: "基准 JDK17 自动下载 · 多版本可选 · 不匹配时黄条提示";
-                        kind: ControlKind.button;
-                        button-text: "管理多版本";
-                        clicked => { root.manage-java(); }
-                    }
-
-                    // ── 账户 ────────────────────────────────────────
-                    if root.section == SettingSection.account : SettingGroup { title: "账户（D9）"; }
-                    if root.section == SettingSection.account : SettingItem {
-                        label: "当前账户";
-                        description: root.account-label;
-                        kind: ControlKind.button;
-                        button-text: "登录 / 切换";
-                        clicked => { root.login(); }
-                    }
-
-                    // ── AI ──────────────────────────────────────────
-                    if root.section == SettingSection.ai : SettingGroup { title: "AI 助手（D4）"; }
-                    if root.section == SettingSection.ai : SettingItem {
-                        label: "模型端点";
-                        description: "OpenAI 兼容 / 本地 llama.cpp / Anthropic / 自定义";
-                        kind: ControlKind.segmented;
-                        options: ["OpenAI", "llama.cpp", "Anthropic", "自定义"];
-                        selected: root.ai-endpoint;
-                        changed(i) => {
-                            root.ai-endpoint = i;
-                            root.ai-endpoint-changed(i);
-                        }
-                    }
-                    if root.section == SettingSection.ai : SettingItem {
-                        label: "YOLO 模式";
-                        description: "跳过全部确认弹窗（审计照记），账户/凭据操作永不 YOLO";
-                        kind: ControlKind.toggle;
-                        checked: root.yolo;
-                        toggled(v) => { root.yolo-changed(v); }
-                    }
-                    if root.section == SettingSection.ai : SettingItem {
-                        label: "MCP server";
-                        description: "允许外部客户端（如 Claude Desktop）调用工具集";
-                        kind: ControlKind.toggle;
-                        checked: root.mcp-enabled;
-                        toggled(v) => { root.mcp-changed(v); }
-                    }
-                    if root.section == SettingSection.ai : SettingItem {
-                        label: "审计日志";
-                        description: "AI 的所有写操作都有记录";
-                        kind: ControlKind.button;
-                        button-text: "查看";
-                        clicked => { root.open-audit-log(); }
-                    }
+                    // ── 数据 / 下载 / Java / 账户 / AI / MCP ────────────
+                    // 行来自 core::setting schema（`PageState.setting-groups`），写回走
+                    // `SettingStore::set`——与 `ull config set` / AI `set_config` 同一份 launcher.json。
+                    if root.section == SettingSection.data : SettingsGroups { tab: "data"; }
+                    if root.section == SettingSection.download : SettingsGroups { tab: "download"; }
+                    if root.section == SettingSection.java : SettingsGroups { tab: "java"; }
+                    if root.section == SettingSection.ai : SettingsGroups { tab: "ai"; }
+                    if root.section == SettingSection.ai : SettingsGroups { tab: "mcp"; }
+                    if root.section == SettingSection.account : AccountSection { }
 
                     // ── 代理 ────────────────────────────────────────
                     if root.section == SettingSection.proxy : SettingGroup { title: "代理"; }

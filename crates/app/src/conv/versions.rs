@@ -1,17 +1,25 @@
 //! 版本列表与下载分类映射（下载页）。
 
-use crate::dto::{AncientKind, VersionKind as DtoVersionKind};
+use crate::dto::{AncientKind, VersionCategory, VersionKind as DtoVersionKind, VersionSummary};
 use crate::state::AppState;
 use crate::{UiVersion, VersionKind};
 
-/// 下载页版本行（已按「仅已装」+ 版本号筛选词过滤）。
-pub fn versions(state: &AppState) -> Vec<UiVersion> {
-    let query = state.download_query.trim().to_lowercase();
-    state
-        .versions
+/// 分类侧栏 → 该分类下的版本（远古版按子类细分）。
+pub fn in_category(category: VersionCategory, kind: DtoVersionKind) -> bool {
+    match (category, kind) {
+        (VersionCategory::Release, DtoVersionKind::Release) => true,
+        (VersionCategory::Snapshot, DtoVersionKind::Snapshot) => true,
+        (VersionCategory::Ancient(expected), DtoVersionKind::Ancient(actual)) => expected == actual,
+        // 未接线的分类（整合包 / Mod）不显示任何版本，而不是把全部版本倒进去
+        (VersionCategory::Modpack | VersionCategory::Mod, _) => false,
+        _ => false,
+    }
+}
+
+/// 版本行（下载页与新建向导共用）。
+pub fn version_rows(versions: &[VersionSummary]) -> Vec<UiVersion> {
+    versions
         .iter()
-        .filter(|version| !state.installed_only || version.installed)
-        .filter(|version| query.is_empty() || version.id.to_lowercase().contains(&query))
         .map(|version| UiVersion {
             id: version.id.clone().into(),
             kind: version_kind(version.kind),
@@ -20,6 +28,20 @@ pub fn versions(state: &AppState) -> Vec<UiVersion> {
             ancient: version.kind.is_ancient(),
         })
         .collect()
+}
+
+/// 下载页版本行（按当前分类 + 「仅已装」+ 版本号筛选词过滤）。
+pub fn versions(state: &AppState) -> Vec<UiVersion> {
+    let query = state.download_query.trim().to_lowercase();
+    let filtered: Vec<VersionSummary> = state
+        .versions
+        .iter()
+        .filter(|version| in_category(state.prefs.download_category, version.kind))
+        .filter(|version| !state.installed_only || version.installed)
+        .filter(|version| query.is_empty() || version.id.to_lowercase().contains(&query))
+        .cloned()
+        .collect();
+    version_rows(&filtered)
 }
 
 fn version_kind(kind: DtoVersionKind) -> VersionKind {

@@ -33,6 +33,7 @@ pub fn phase(runtime: &InstanceRuntime) -> (RuntimePhase, f32, String) {
                 dto::LaunchStage::Download => RuntimePhase::Downloading,
                 dto::LaunchStage::Verify => RuntimePhase::Verifying,
                 dto::LaunchStage::Launch => RuntimePhase::Launching,
+                dto::LaunchStage::Window => RuntimePhase::Running,
             };
             (phase, progress.ratio(), stage.label().to_string())
         }

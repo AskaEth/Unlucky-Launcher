@@ -1,7 +1,9 @@
 //! AI 会话 DTO：消息、工具调用可视化与 agent 事件。
 
+use serde::{Deserialize, Serialize};
+
 /// 会话消息角色。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChatRole {
     /// 用户
     User,
@@ -14,7 +16,7 @@ pub enum ChatRole {
 }
 
 /// 工具调用可视化条目。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCallView {
     /// 工具名（与 ToolSpec 注册表同名）
     pub name: String,
@@ -25,7 +27,7 @@ pub struct ToolCallView {
 }
 
 /// 一条会话消息。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatMessage {
     /// 角色
     pub role: ChatRole,
@@ -60,7 +62,7 @@ impl ChatMessage {
 }
 
 /// agent 侧事件。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentEvent {
     /// 追加一条完整消息
     MessageAppended(ChatMessage),

@@ -15,6 +15,11 @@ path = "src/main.rs"
 
 [dependencies]
 slint.workspace = true
+# 跨界 DTO 必须可序列化（AGENTS §6 / 01c §5）：事件与快照是 IPC 契约，
+# 序列化能力由 derive 钉住，测试里做 round-trip 断言。
+serde.workspace = true
+# host 层要读 core 设置/事件里的 JSON 值（serde_json 是 workspace 既有依赖）
+serde_json.workspace = true
 
 # 边界（01c §5 / D3）：app 只经 DTO 消费 core/agent，**不 import 内部类型**。
 # P0 的 host 是 src/mock.rs 的假后端；这两个依赖在这里登记，是为了后续把真实 host
@@ -24,6 +29,8 @@ unlucky-agent = { path = "../agent", version = "0.1" }
 
 [build-dependencies]
 slint-build.workspace = true
+
+[dev-dependencies]
 
 [lints]
 workspace = true

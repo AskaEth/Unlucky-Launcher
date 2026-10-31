@@ -1,14 +1,19 @@
 // G2 下载页（09 §2 P0·G2 / Q24-4 定案）：页内独立左侧分类栏（常驻，非 tab）+ 右侧版本列表。
 // 远古版入口显式可达（ULL 对 HMCL「隐藏」行为的纠偏），下挂 classic/alpha/beta/unlisted 子类树，
 // 进入远古版分类时顶部提示兼容性 + 每行带「远古版」徽标（防误装）。
+//
+// P3 接线：右侧多一个「Java 运行时」视图（四家发行版 + 回退链），页面底部常驻安装进度条。
 import { Theme } from "../theme/tokens.slint";
 import { Metrics } from "../theme/metrics.slint";
 import { UiVersion, VersionKind, DownloadCategory } from "../models.slint";
+import { PageState } from "../page_state.slint";
 import { UiText, TextRole } from "../components/label.slint";
 import { AppIcon, IconKind } from "../components/icons.slint";
 import { Badge } from "../components/badge.slint";
 import { MetroButton, ButtonKind } from "../widgets/button.slint";
 import { SearchField, CheckBox } from "../widgets/inputs.slint";
+import { InstallPanel } from "../components/install-panel.slint";
+import { JavaPanel } from "download-java.slint";
 import { ListView } from "std-widgets.slint";
 
 component CategoryRow inherits Rectangle {
@@ -112,6 +117,8 @@ export component DownloadPage inherits Rectangle {
     in-out property <string> query: "";
     /// 远古版子类树是否展开（默认展开，显式可达）
     in-out property <bool> ancient-expanded: true;
+    /// 右侧视图：0 = 版本列表，1 = Java 运行时
+    in-out property <int> view-tab <=> PageState.download-tab;
 
     callback category-changed(DownloadCategory);
     callback install(string);
@@ -123,148 +130,191 @@ export component DownloadPage inherits Rectangle {
 
     background: Theme.bg-canvas;
 
-    HorizontalLayout {
-        // ── 页内分类侧栏（常驻）───────────────────────────────────
+    VerticalLayout {
+        // 视图切换（版本 / Java）
         Rectangle {
-            width: 200px;
+            height: 40px;
             background: Theme.bg-surface;
-            border-width: 1px;
-            border-color: Theme.stroke;
+            HorizontalLayout {
+                padding-left: Metrics.gap-4;
+                spacing: Metrics.gap-2;
+                UiText {
+                    role: TextRole.subtitle;
+                    text: "版本获取";
+                    width: 96px;
+                }
+                MetroButton {
+                    kind: root.view-tab == 0 ? ButtonKind.accent : ButtonKind.subtle;
+                    text: "版本列表";
+                    button-height: 26px;
+                    clicked => { root.view-tab = 0; }
+                }
+                MetroButton {
+                    kind: root.view-tab == 1 ? ButtonKind.accent : ButtonKind.subtle;
+                    text: "Java 运行时";
+                    button-height: 26px;
+                    clicked => { root.view-tab = 1; }
+                }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                if PageState.java-busy : UiText {
+                    role: TextRole.caption;
+                    text: "Java 安装中…";
+                    color: Theme.accent;
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.stroke; }
 
+        if root.view-tab == 0 : HorizontalLayout {
+            vertical-stretch: 1;
+
+            // ── 页内分类侧栏（常驻）───────────────────────────────────
+            Rectangle {
+                width: 200px;
+                background: Theme.bg-surface;
+                border-width: 1px;
+                border-color: Theme.stroke;
+
+                VerticalLayout {
+                    padding-top: Metrics.gap-2;
+
+                    CategoryRow {
+                        label: "正式版 release";
+                        active: root.category == DownloadCategory.release;
+                        clicked => { root.category-changed(DownloadCategory.release); }
+                    }
+                    CategoryRow {
+                        label: "预览版 snapshot";
+                        active: root.category == DownloadCategory.snapshot;
+                        clicked => { root.category-changed(DownloadCategory.snapshot); }
+                    }
+
+                    // 远古版：可展开的父节点 + 子类树
+                    CategoryRow {
+                        label: root.ancient-expanded ? "远古版 ▾" : "远古版 ▸";
+                        active: root.category == DownloadCategory.ancientClassic
+                            || root.category == DownloadCategory.ancientAlpha
+                            || root.category == DownloadCategory.ancientBeta
+                            || root.category == DownloadCategory.ancientUnlisted;
+                        clicked => { root.toggle-ancient(); }
+                    }
+                    if root.ancient-expanded : CategoryRow {
+                        label: "classic（rd-*）";
+                        sub: true;
+                        active: root.category == DownloadCategory.ancientClassic;
+                        clicked => { root.category-changed(DownloadCategory.ancientClassic); }
+                    }
+                    if root.ancient-expanded : CategoryRow {
+                        label: "old_alpha（a1.*）";
+                        sub: true;
+                        active: root.category == DownloadCategory.ancientAlpha;
+                        clicked => { root.category-changed(DownloadCategory.ancientAlpha); }
+                    }
+                    if root.ancient-expanded : CategoryRow {
+                        label: "old_beta（b1.*）";
+                        sub: true;
+                        active: root.category == DownloadCategory.ancientBeta;
+                        clicked => { root.category-changed(DownloadCategory.ancientBeta); }
+                    }
+                    if root.ancient-expanded : CategoryRow {
+                        label: "unlisted 汇总";
+                        sub: true;
+                        active: root.category == DownloadCategory.ancientUnlisted;
+                        clicked => { root.category-changed(DownloadCategory.ancientUnlisted); }
+                    }
+
+                    CategoryRow {
+                        label: "整合包（P1）";
+                        disabled: true;
+                    }
+                    CategoryRow {
+                        label: "Mod（P1）";
+                        disabled: true;
+                    }
+
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+            }
+
+            // ── 右侧版本列表 ──────────────────────────────────────────
             VerticalLayout {
-                padding-top: Metrics.gap-2;
+                vertical-stretch: 1;
 
-                CategoryRow {
-                    label: "正式版 release";
-                    active: root.category == DownloadCategory.release;
-                    clicked => { root.category-changed(DownloadCategory.release); }
-                }
-                CategoryRow {
-                    label: "预览版 snapshot";
-                    active: root.category == DownloadCategory.snapshot;
-                    clicked => { root.category-changed(DownloadCategory.snapshot); }
+                Rectangle {
+                    height: Metrics.page-header-height;
+                    background: Theme.bg-canvas;
+
+                    HorizontalLayout {
+                        padding-left: Metrics.gap-4;
+                        padding-right: Metrics.gap-4;
+                        spacing: Metrics.gap-3;
+
+                        SearchField {
+                            width: 220px;
+                            placeholder: "筛选版本号";
+                            text <=> root.query;
+                            edited(t) => { root.query-changed(t); }
+                        }
+                        CheckBox {
+                            text: "仅已装";
+                            checked: root.installed-only;
+                            toggled(v) => { root.installed-only-changed(v); }
+                        }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                    }
                 }
 
-                // 远古版：可展开的父节点 + 子类树
-                CategoryRow {
-                    label: root.ancient-expanded ? "远古版 ▾" : "远古版 ▸";
-                    active: root.category == DownloadCategory.ancientClassic
+                // 远古版兼容性提示条（首次进入显示，显式可达的代价告知）
+                Rectangle {
+                    height: 44px;
+                    visible: root.category == DownloadCategory.ancientClassic
                         || root.category == DownloadCategory.ancientAlpha
                         || root.category == DownloadCategory.ancientBeta
                         || root.category == DownloadCategory.ancientUnlisted;
-                    clicked => { root.toggle-ancient(); }
-                }
-                if root.ancient-expanded : CategoryRow {
-                    label: "classic（rd-*）";
-                    sub: true;
-                    active: root.category == DownloadCategory.ancientClassic;
-                    clicked => { root.category-changed(DownloadCategory.ancientClassic); }
-                }
-                if root.ancient-expanded : CategoryRow {
-                    label: "old_alpha（a1.*）";
-                    sub: true;
-                    active: root.category == DownloadCategory.ancientAlpha;
-                    clicked => { root.category-changed(DownloadCategory.ancientAlpha); }
-                }
-                if root.ancient-expanded : CategoryRow {
-                    label: "old_beta（b1.*）";
-                    sub: true;
-                    active: root.category == DownloadCategory.ancientBeta;
-                    clicked => { root.category-changed(DownloadCategory.ancientBeta); }
-                }
-                if root.ancient-expanded : CategoryRow {
-                    label: "unlisted 汇总";
-                    sub: true;
-                    active: root.category == DownloadCategory.ancientUnlisted;
-                    clicked => { root.category-changed(DownloadCategory.ancientUnlisted); }
+                    background: Theme.state-warn-soft;
+
+                    HorizontalLayout {
+                        padding-left: Metrics.gap-4;
+                        padding-right: Metrics.gap-4;
+                        spacing: Metrics.gap-2;
+
+                        AppIcon { kind: IconKind.warn; icon-size: 16px; tint: Theme.state-warn; }
+                        UiText {
+                            role: TextRole.caption;
+                            text: "远古版（classic/alpha/beta）需要旧版 Java 与旧启动参数，装完请先看兼容性说明。";
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                        MetroButton {
+                            kind: ButtonKind.subtle;
+                            text: "说明";
+                            button-height: 26px;
+                            clicked => { root.ancient-help(); }
+                        }
+                    }
                 }
 
-                CategoryRow {
-                    label: "整合包（P1）";
-                    disabled: true;
-                }
-                CategoryRow {
-                    label: "Mod（P1）";
-                    disabled: true;
-                }
+                Rectangle { height: 1px; background: Theme.stroke; }
 
-                Rectangle { vertical-stretch: 1; background: transparent; }
+                ListView {
+                    vertical-stretch: 1;
+
+                    for v in root.versions : VersionRow {
+                        data: v;
+                        install => { root.install(v.id); }
+                    }
+                }
             }
         }
 
-        // ── 右侧版本列表 ──────────────────────────────────────────
-        VerticalLayout {
+        if root.view-tab == 1 : JavaPanel {
             vertical-stretch: 1;
+        }
 
-            Rectangle {
-                height: Metrics.page-header-height;
-                background: Theme.bg-canvas;
-
-                HorizontalLayout {
-                    padding-left: Metrics.gap-4;
-                    padding-right: Metrics.gap-4;
-                    spacing: Metrics.gap-3;
-
-                    UiText {
-                        role: TextRole.subtitle;
-                        text: "版本获取";
-                        width: 96px;
-                    }
-                    SearchField {
-                        width: 220px;
-                        placeholder: "筛选版本号";
-                        text <=> root.query;
-                        edited(t) => { root.query-changed(t); }
-                    }
-                    CheckBox {
-                        text: "仅已装";
-                        checked: root.installed-only;
-                        toggled(v) => { root.installed-only-changed(v); }
-                    }
-                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                }
-            }
-
-            // 远古版兼容性提示条（首次进入显示，显式可达的代价告知）
-            Rectangle {
-                height: 44px;
-                visible: root.category == DownloadCategory.ancientClassic
-                    || root.category == DownloadCategory.ancientAlpha
-                    || root.category == DownloadCategory.ancientBeta
-                    || root.category == DownloadCategory.ancientUnlisted;
-                background: Theme.state-warn-soft;
-
-                HorizontalLayout {
-                    padding-left: Metrics.gap-4;
-                    padding-right: Metrics.gap-4;
-                    spacing: Metrics.gap-2;
-
-                    AppIcon { kind: IconKind.warn; icon-size: 16px; tint: Theme.state-warn; }
-                    UiText {
-                        role: TextRole.caption;
-                        text: "远古版（classic/alpha/beta）需要旧版 Java 与旧启动参数，装完请先看兼容性说明。";
-                        wrap: word-wrap;
-                        horizontal-stretch: 1;
-                    }
-                    MetroButton {
-                        kind: ButtonKind.subtle;
-                        text: "说明";
-                        button-height: 26px;
-                        clicked => { root.ancient-help(); }
-                    }
-                }
-            }
-
-            Rectangle { height: 1px; background: Theme.stroke; }
-
-            ListView {
-                vertical-stretch: 1;
-
-                for v in root.versions : VersionRow {
-                    data: v;
-                    install => { root.install(v.id); }
-                }
-            }
+        // 安装进度（下载页行内安装 / 向导共用同一份进度）
+        InstallPanel {
+            data: PageState.install;
+            cancel => { PageState.install-cancel(); }
         }
     }
 }

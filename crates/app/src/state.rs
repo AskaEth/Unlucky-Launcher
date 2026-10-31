@@ -5,12 +5,14 @@
 
 use crate::dialogs::DialogQueue;
 use crate::dto::{
-    AgentEvent, AppEvent, ChatMessage, ChatRole, CoreEvent, DiagnosisReport, InstanceRuntime,
-    InstanceSummary, LogLine, LogSession, Progress, ToolCallView, VersionSummary,
+    AccountView, AgentEvent, AppEvent, ChatMessage, ChatRole, CoreEvent, DeviceLoginView,
+    DiagnosisReport, InstallProgressView, InstanceRuntime, InstanceSummary, JavaPageView, LogLine,
+    LogSession, NoticeView, Progress, SettingGroupView, ToolCallView, VersionSummary,
 };
 use crate::prefs::UiPrefs;
 use crate::router::{AiPanelMode, Route, Router};
-use crate::toast::ToastCenter;
+use crate::toast::{ToastCenter, ToastKind};
+use crate::wizard::WizardState;
 
 /// AI 会话状态（右侧栏与独立页共享同一份，切换不丢）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +77,9 @@ pub fn grid_positions(count: usize, columns: usize) -> Vec<(usize, usize)> {
         .collect()
 }
 
+/// 实时日志最多保留的行数（滚动窗口；更多行由日志页的筛选/历史会话承担）。
+pub const MAX_LIVE_LINES: usize = 2_000;
+
 /// 应用全局状态。
 #[derive(Debug)]
 pub struct AppState {
@@ -106,6 +111,24 @@ pub struct AppState {
     pub installed_only: bool,
     /// 下载页版本号筛选词
     pub download_query: String,
+    /// 账户列表（三轨统一视图；凭据不在其中）
+    pub accounts: Vec<AccountView>,
+    /// 微软设备码登录状态
+    pub device_login: DeviceLoginView,
+    /// Java 页快照（发行版 / 回退链 / 运行时）
+    pub java: JavaPageView,
+    /// 安装进度（None = 没有安装任务）
+    pub install: Option<InstallProgressView>,
+    /// 设置分组（设置页右栏）
+    pub settings_groups: Vec<SettingGroupView>,
+    /// 当前选中的设置分组（download / java / data / ai / mcp）
+    pub settings_tab: String,
+    /// 横幅通知
+    pub notices: Vec<NoticeView>,
+    /// 新建实例向导
+    pub wizard: WizardState,
+    /// 正在实时尾随的会话
+    pub live_session: Option<String>,
 }
 
 impl Default for AppState {
@@ -132,6 +155,15 @@ impl AppState {
             instance_query: String::new(),
             installed_only: false,
             download_query: String::new(),
+            accounts: Vec::new(),
+            device_login: DeviceLoginView::new(),
+            java: JavaPageView::new(),
+            install: None,
+            settings_groups: Vec::new(),
+            settings_tab: "download".to_string(),
+            notices: Vec::new(),
+            wizard: WizardState::new(),
+            live_session: None,
         }
     }
 
@@ -186,12 +218,51 @@ impl AppState {
             }
             CoreEvent::VersionListChanged(versions) => self.versions = versions,
             CoreEvent::LogSessionsChanged(sessions) => self.log_sessions = sessions,
-            CoreEvent::LogLinesChanged(lines) => self.log_lines = lines,
+            CoreEvent::LogLinesChanged(lines) => {
+                self.log_lines = lines;
+                self.live_session = None;
+            }
+            CoreEvent::LogAppended(batch) => self.append_live_lines(&batch),
+            CoreEvent::LaunchFinished(finished) => {
+                self.live_session = None;
+                self.selected_session = Some(finished.session.clone());
+                let kind = if finished.outcome == crate::dto::LogOutcome::Ok {
+                    ToastKind::Success
+                } else {
+                    ToastKind::Error
+                };
+                self.toasts.push(kind, finished.summary);
+            }
             CoreEvent::DiagnosisReady(report) => self.diagnosis = Some(report),
+            CoreEvent::AccountsChanged(accounts) => self.accounts = accounts,
+            CoreEvent::DeviceLoginChanged(view) => {
+                if view.phase == crate::dto::DeviceLoginPhase::Succeeded {
+                    self.toasts
+                        .push(ToastKind::Success, format!("已登录：{}", view.account_name));
+                }
+                if view.phase == crate::dto::DeviceLoginPhase::Failed {
+                    self.toasts.push(ToastKind::Error, view.message.clone());
+                }
+                self.device_login = view;
+            }
+            CoreEvent::JavaChanged(page) => self.java = page,
+            CoreEvent::InstallProgress(progress) => match progress {
+                Some(progress) => {
+                    let terminal = progress.stage.is_terminal();
+                    self.install = Some(progress);
+                    if terminal {
+                        self.wizard.open = false;
+                        self.wizard.submitting = false;
+                    }
+                }
+                None => self.install = None,
+            },
+            CoreEvent::SettingsChanged(groups) => self.settings_groups = groups,
+            CoreEvent::NoticesChanged(notices) => self.notices = notices,
         }
     }
 
-    /// agent 事件。
+    /// agent 事件（AI 会话的流式消息与工具调用）。
     pub fn apply_agent(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::MessageAppended(message) => {
@@ -239,6 +310,25 @@ impl AppState {
                     }
                 }
             }
+        }
+    }
+
+    /// 实时日志增量：只追加，封顶 [`MAX_LIVE_LINES`] 行（滚动窗口）。
+    fn append_live_lines(&mut self, batch: &crate::dto::LiveLogBatch) {
+        if self
+            .live_session
+            .as_deref()
+            .is_some_and(|session| session != batch.session)
+        {
+            // 换了一个会话在跑：清掉上一场的行，避免两场日志混在一起
+            self.log_lines.clear();
+        }
+        self.live_session = batch.running.then(|| batch.session.clone());
+        self.selected_session = Some(batch.session.clone());
+        self.log_lines.extend(batch.lines.iter().cloned());
+        if self.log_lines.len() > MAX_LIVE_LINES {
+            let drop = self.log_lines.len() - MAX_LIVE_LINES;
+            self.log_lines.drain(..drop);
         }
     }
 

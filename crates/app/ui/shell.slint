@@ -7,6 +7,8 @@ import {
     RouteKind, TileSize, InstanceView, SettingSection, DownloadCategory, ThemeMode, BgFillKind,
     UiTile, UiVersion, UiLogSession, UiLogLine, UiDiagnosis, UiChatMessage, UiDialog, UiToast,
 } from "models.slint";
+import { PageState } from "page_state.slint";
+import { NewInstanceWizard } from "widgets/wizard.slint";
 import { TitleBar } from "components/titlebar.slint";
 import { Nav } from "components/nav.slint";
 import { AiPanel } from "components/ai-panel.slint";
@@ -14,10 +16,12 @@ import { UiText, TextRole } from "components/label.slint";
 import { MetroButton, ButtonKind } from "widgets/button.slint";
 import { DialogHost } from "widgets/dialog.slint";
 import { ToastHost } from "widgets/toast.slint";
+import { NoticeBar } from "components/notice-bar.slint";
 import { InstancesPage } from "pages/instances.slint";
 import { DownloadPage } from "pages/download.slint";
 import { LogsPage } from "pages/logs.slint";
 import { SettingsPage } from "pages/settings.slint";
+
 
 export component AppShell inherits Rectangle {
     // ── 窗口 ────────────────────────────────────────────────────
@@ -189,6 +193,10 @@ export component AppShell inherits Rectangle {
             request-close => { root.request-close(); }
         }
 
+        NoticeBar {
+            notices: PageState.notices;
+        }
+
         HorizontalLayout {
             // 左侧主导航
             Nav {
@@ -259,6 +267,7 @@ export component AppShell inherits Rectangle {
                     select(id) => { root.log-select(id); }
                     ask-ai(id) => { root.log-ask-ai(id); }
                     apply-fix => { root.log-apply-fix(); }
+                    refresh => { PageState.logs-refresh(); }
                 }
 
                 if root.route == RouteKind.settings : SettingsPage {
@@ -354,6 +363,11 @@ export component AppShell inherits Rectangle {
                 stop => { root.ai-stop(); }
             }
         }
+    }
+
+    // 新建实例向导（全屏模态；数据来自 PageState）
+    NewInstanceWizard {
+        versions: root.versions;
     }
 
     // 覆盖层：模态队列（一次一条）+ 右下 Toast

@@ -8,12 +8,17 @@
 mod agent;
 mod instances;
 mod logs;
+mod pages;
 mod ui;
 mod versions;
 
 pub use agent::{chat, dialog, toasts};
 pub use instances::{running_tiles, tiles};
 pub use logs::{diagnosis, log_lines, log_sessions};
+pub use pages::{
+    accounts, active_account_name, device, install, java_chain, java_runtimes, java_vendors,
+    notices, setting_groups, wizard, wizard_versions,
+};
 pub use ui::{
     accent_color, bg_fill, bg_fill_from, category_from, instance_view, instance_view_from, route,
     route_from, theme_mode, theme_mode_from, tile_size, tile_size_from, version_category,

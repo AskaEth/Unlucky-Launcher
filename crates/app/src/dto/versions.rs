@@ -1,7 +1,9 @@
 //! 下载页 DTO：版本列表与分类（含远古版子类，D16/Q24-4）。
 
+use serde::{Deserialize, Serialize};
+
 /// 版本类型（远古版按 unlisted-versions 的分类拆开）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VersionKind {
     /// 正式版
     Release,
@@ -12,7 +14,7 @@ pub enum VersionKind {
 }
 
 /// 远古版子类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AncientKind {
     /// classic（rd-*）
     Classic,
@@ -32,7 +34,7 @@ impl VersionKind {
 }
 
 /// 下载页版本行。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VersionSummary {
     /// 版本 id（如 `1.20.4` / `rd-132211`）
     pub id: String,
@@ -45,7 +47,7 @@ pub struct VersionSummary {
 }
 
 /// 下载页左侧分类（页内常驻侧栏的选中项）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VersionCategory {
     /// 正式版
     Release,
