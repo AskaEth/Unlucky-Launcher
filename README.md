@@ -2,6 +2,8 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
+> **Official project home**: https://github.com/AskaEth/Unlucky-Launcher
+
 Unlucky Launcher (ULL) is a free, open-source Minecraft: Java Edition launcher written in Rust
 (Apache-2.0, non-commercial), with a Slint + Metro UI. It embeds an AI agent client (chat /
 configuration / crash diagnosis) and integrates with the broader agent tooling ecosystem via MCP.

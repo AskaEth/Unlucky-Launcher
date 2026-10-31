@@ -2,6 +2,8 @@
 
 [English](README.md) · **简体中文**
 
+> **官方项目主页**：https://github.com/AskaEth/Unlucky-Launcher
+
 Rust 原生单文件 Minecraft 启动器：**Slint + Metro 视觉**，内置 **AI Agent 客户端**（对话 / 改配置 / 崩溃诊断），
 融合主流 Agent 工具（**MCP**），**最低基线 Win10+**。
 
