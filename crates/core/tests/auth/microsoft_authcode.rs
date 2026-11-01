@@ -141,6 +141,62 @@ async fn callback_server_ignores_unrelated_requests_and_bad_state() {
 }
 
 #[tokio::test]
+async fn foreign_state_cannot_cancel_the_login() {
+    // P2 回归：回调先校验 state，再处理 error（RFC 6749 §4.1.2.1 / RFC 9207）。
+    // 修之前 `GET /auth?error=access_denied`（state 随便给或不给）就能把登录判成 Canceled。
+    let server = CallbackServer::bind(None, 1, "state-ok")
+        .await
+        .expect("绑定");
+    let port = server.port();
+    let browser = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let base = format!("http://localhost:{port}/auth");
+        // 1. 连 state 都不给：与本次登录无关 → 400，继续等。
+        let bare = reqwest::get(format!("{base}?error=access_denied"))
+            .await
+            .expect("伪造取消");
+        assert_eq!(bare.status(), 400);
+        // 2. state 明显不匹配：同样忽略，绝不当成用户取消。
+        let foreign = reqwest::get(format!("{base}?error=access_denied&state=not-our-state"))
+            .await
+            .expect("伪造取消带错 state");
+        assert_eq!(foreign.status(), 400);
+        // 3. 真正带对 state 的回调仍然能完成登录。
+        let good = reqwest::get(format!("{base}?code=good-code&state=state-ok"))
+            .await
+            .expect("真回调");
+        assert_eq!(good.status(), 200);
+    });
+
+    let code = server
+        .wait_for_code(Duration::from_secs(5))
+        .await
+        .expect("伪造的 access_denied 不能中止登录");
+    assert_eq!(code, "good-code");
+    browser.await.expect("模拟浏览器任务");
+}
+
+#[tokio::test]
+async fn access_denied_with_our_state_is_still_canceled() {
+    // 另一半语义：用户真的在授权页点了取消（带本机 state）→ 仍然是 Canceled。
+    let server = CallbackServer::bind(None, 1, "state-ok")
+        .await
+        .expect("绑定");
+    let port = server.port();
+    let browser = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let url = format!("http://localhost:{port}/auth?error=access_denied&state=state-ok");
+        let _ = reqwest::get(url).await;
+    });
+    let error = server
+        .wait_for_code(Duration::from_secs(5))
+        .await
+        .expect_err("本机 state 的取消要生效");
+    assert_eq!(error, AuthError::Canceled);
+    browser.await.expect("模拟浏览器任务");
+}
+
+#[tokio::test]
 async fn callback_timeout_is_reported() {
     let auth = MicrosoftAuth::new(CLIENT_ID)
         .expect("构造")

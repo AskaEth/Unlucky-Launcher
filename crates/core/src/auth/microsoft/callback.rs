@@ -12,7 +12,9 @@
 //!    `redirect_uri` 必须用**最终绑到的端口**回填，换 token 时再原样带上（URI 严格一致）。
 //! 3. **非 `/auth` 的请求（`/favicon.ico`、浏览器预连）回 404 后继续等**：让一个 favicon
 //!    把整次登录判成失败是最容易犯的错。
-//! 4. **`state` 不匹配的迟到回调回 400 后继续等**：旧标签页的回调不该打断新的登录；
+//! 4. **`state` 不匹配的请求一律回 400 后继续等**——包括带 `error=` 的那些：旧标签页的
+//!    迟到回调不该打断新的登录，更要紧的是 RFC 6749 §4.1.2.1 / RFC 9207 要求**错误响应同样
+//!    要校验 `state`**；否则任何人 `GET /auth?error=access_denied` 就能静默中止别人的登录。
 //!    真正的超时由调用方的时间预算兜底。
 
 use std::time::Duration;
@@ -131,7 +133,12 @@ impl CallbackServer {
                 Err(_) => return Err(wait_timeout(timeout)),
             };
             // 一条连接最多读这么久请求头：慢客户端/半开连接不能把整个登录拖过时间预算。
-            let budget = REQUEST_READ_TIMEOUT.min(remaining);
+            // 预算按 **accept 之后** 的剩余时间重算（用 accept 前那份会让总时长超发最多 5s）。
+            let budget = REQUEST_READ_TIMEOUT
+                .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+            if budget.is_zero() {
+                return Err(wait_timeout(timeout));
+            }
             match tokio::time::timeout(budget, self.handle(&mut stream)).await {
                 Ok(result) => {
                     if let Some(code) = result? {
@@ -157,13 +164,16 @@ impl CallbackServer {
             return Ok(None);
         }
         let params = Query::parse(query);
-        if let Some(error) = params.get("error") {
-            respond(stream, 200, DENIED_PAGE).await;
-            return Err(oauth_error(error, params.get("error_description")));
-        }
+        // state 必须先校验，且**先于** error：错误响应同样要认 state（RFC 6749 §4.1.2.1 /
+        // RFC 9207）。否则任意一次 `GET /auth?error=access_denied`（state 随便给或不给）就能
+        // 把这台机器上正在进行的登录静默中止 —— 不需要知道随机 state、不需要 code。
         if params.get("state") != Some(self.state.as_str()) {
             respond(stream, 400, BAD_REQUEST_PAGE).await;
             return Ok(None);
+        }
+        if let Some(error) = params.get("error") {
+            respond(stream, 200, DENIED_PAGE).await;
+            return Err(oauth_error(error, params.get("error_description")));
         }
         let Some(code) = params.get("code").filter(|code| !code.is_empty()) else {
             respond(stream, 400, BAD_REQUEST_PAGE).await;

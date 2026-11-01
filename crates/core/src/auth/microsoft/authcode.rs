@@ -195,18 +195,26 @@ where
 }
 
 /// 每次登录一个 `state`（不用于加密，只用来把迟到的旧回调挡掉）。
+///
+/// 128 位（两个独立随机种子的 SipHash 输出拼接）：RFC 6749 §10.10 建议 `state` 至少
+/// 128 位熵，挡住「猜到 state 就能伪造回调」这类攻击面。
 fn nonce() -> String {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
 
-    let mut hasher = RandomState::new().build_hasher();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_nanos())
         .unwrap_or(0);
-    hasher.write_u128(nanos);
-    hasher.write_u32(std::process::id());
-    format!("{:016x}", hasher.finish())
+    let mut halves = [String::new(), String::new()];
+    for half in &mut halves {
+        // 每次 `RandomState::new()` 都是独立随机种子 → 两段各 64 位、彼此不可推。
+        let mut hasher = RandomState::new().build_hasher();
+        hasher.write_u128(nanos);
+        hasher.write_u32(std::process::id());
+        *half = format!("{:016x}", hasher.finish());
+    }
+    format!("{}{}", halves[0], halves[1])
 }
 
 /// 百分号编码（RFC 3986 unreserved 之外一律转义；空格用 `%20` 而不是 `+`）。
@@ -263,5 +271,14 @@ mod tests {
     #[test]
     fn grant_type_is_the_standard_one() {
         assert_eq!(AUTHORIZATION_CODE_GRANT, "authorization_code");
+    }
+
+    #[test]
+    fn generated_state_has_128_bits_of_entropy() {
+        let first = super::nonce();
+        let second = super::nonce();
+        assert_eq!(first.len(), 32, "128 位 = 32 个 hex 字符：{first}");
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()), "{first}");
+        assert_ne!(first, second, "每次登录的 state 必须不同");
     }
 }
