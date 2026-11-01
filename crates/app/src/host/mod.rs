@@ -20,6 +20,8 @@ mod game;
 mod handle;
 mod identity;
 mod install;
+mod install_journal;
+mod install_processors;
 mod java;
 mod job;
 mod launch;
