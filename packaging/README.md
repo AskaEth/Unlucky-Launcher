@@ -63,10 +63,16 @@ python packaging/make_artifacts.py --no-smoke         # 跳过 ull --version 冒
   `macos-latest`（arm64）、`macos-15-intel`（Intel x64；`macos-13` 已下线，`macos-26-intel` 为更新替位）。
 - 每个槽位 `cargo build --release --locked` → `make_artifacts.py` → 归档内容自检 → 上传 artifact。
 - `release` job：下载全部 artifact → 重算一份全量 `SHA256SUMS.txt` → 用 `packaging/release-notes.md`
-  模板渲染支持矩阵 → `gh release create`（**pre-release 默认开**，`workflow_dispatch` 可关）。
+  模板渲染支持矩阵 → `gh release create`（**pre-release 默认开**：首建时 `push` 触发按 pre-release，`workflow_dispatch` 可关）。
 - **同一 tag 重跑幂等**：`gh release view` 命中已存在的 Release 时改走 `gh release upload --clobber`
   + `gh release edit`，覆盖资产与说明而不是再 `create`（`create` 遇已存在会失败，把流水线最后一步染红）。
-  pre-release 标记以首次创建为准，重跑不会翻转它——要改标记请手动 `gh release edit --prerelease / --prerelease=false`。
+- **pre-release 标记只按显式输入断言**：`gh release edit` 分支在默认重跑（`push` 触发的 Re-run，
+  `inputs.prerelease` 为空）时**不传** `--prerelease`，所以重跑**不会**翻转标记；只有 tag ref 上的
+  `workflow_dispatch` 显式给了输入才断言——`prerelease=true` → `--prerelease`，`prerelease=false` →
+  `--prerelease=false`。要改标记两条路等价且互不打架：① 走流水线
+  `gh workflow run release.yml --ref v0.1.0 -f prerelease=false`（会落到 edit 分支显式断言）
+  ② 直接 `gh release edit <tag> --prerelease=false`（不经流水线；后续默认重跑不碰该标记，
+  不会被翻回去）。首建（`create`）仍保持「pre-release 默认开」的老契约，空输入按 `true` 处理。
 
 Windows 为什么用 MSVC 静态 CRT 而不是本机这套 GNU 工具链：两者都属"标准工具链"（D21），
 但发布产物要**不依赖 VC++ 可再发行包**，`+crt-static` 把 CRT 静态链进 exe，Win10+ 的 UCRT 本身是

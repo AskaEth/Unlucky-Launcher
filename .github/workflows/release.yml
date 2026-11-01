@@ -2,7 +2,8 @@ name: Release
 
 # 发布流水线：tag `v*` → 三平台（四槽位）矩阵构建 → 单文件产物 + SHA256SUMS
 # → 上传 artifact + 创建 GitHub Release（pre-release 默认开）。同一 tag 重跑幂等：
-# Release 已存在时覆盖资产与说明，不再 `gh release create`（见 release job 末步）。
+# Release 已存在时覆盖资产与说明，不再 `gh release create`（见 release job 末步）；
+# 重跑**不碰** pre-release 标记，该标记只在 `inputs.prerelease` 显式给出时才被断言。
 #
 # 契约唯一真相源：packaging/README.md（命名/目录/运行时依赖）。
 # 打包本体在 packaging/make_artifacts.py（本地与 CI 同一份脚本，逐字节同布局）。
@@ -198,10 +199,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          flags=(--title "Unlucky Launcher $TAG" --notes-file release-body.md)
-          if [ "${PRERELEASE:-true}" != "false" ]; then
-            flags+=(--prerelease)
-          fi
+          base_flags=(--title "Unlucky Launcher $TAG" --notes-file release-body.md)
+          # pre-release 标记只在**显式要求**时才断言：
+          #   PRERELEASE=true / false —— 来自 tag ref 上的 workflow_dispatch 输入；
+          #   PRERELEASE 空        —— push 触发的运行或它的 Re-run，此时**不碰**该标记，
+          #                           否则会把用户手动提升为 stable 的 Release 静默翻回 pre-release。
+          # 首次创建（create）仍保持「pre-release 默认开」的老契约：空值按 true 处理。
+          create_mark=()
+          edit_mark=()
+          case "${PRERELEASE:-}" in
+            true)
+              create_mark=(--prerelease)
+              edit_mark=(--prerelease)
+              ;;
+            false)
+              edit_mark=(--prerelease=false)
+              ;;
+            "")
+              create_mark=(--prerelease)
+              ;;
+            *)
+              echo "::error::非预期的 inputs.prerelease 取值：$PRERELEASE"
+              exit 1
+              ;;
+          esac
           # Windows 单 exe 装不下 LICENSE/NOTICE/README.md，这三份与产物并列挂到 Release 上，
           # 保证每个下载平台的许可条款都随包分发。
           assets=(dist/unlucky-launcher-* dist/SHA256SUMS.txt LICENSE NOTICE README.md)
@@ -209,7 +230,7 @@ jobs:
             # 同 tag 重跑（补丁 / 重编）：Release 已存在 → 覆盖资产 + 刷新说明，
             # 不再 `create`（那会因已存在而失败，把整条流水线在最后一步染红）。
             gh release upload "$TAG" "${assets[@]}" --clobber
-            gh release edit "$TAG" "${flags[@]}"
+            gh release edit "$TAG" "${base_flags[@]}" "${edit_mark[@]}"
           else
-            gh release create "$TAG" "${assets[@]}" "${flags[@]}"
+            gh release create "$TAG" "${assets[@]}" "${base_flags[@]}" "${create_mark[@]}"
           fi
