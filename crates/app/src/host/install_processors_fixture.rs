@@ -29,6 +29,9 @@ use crate::host::meter::Meter;
 
 static SEQ: AtomicUsize = AtomicUsize::new(0);
 
+/// 一步的计划视图（序号 / 坐标 / 参数 / classpath 条数）。
+pub(super) type StepView = (usize, String, Vec<String>, usize);
+
 /// 一段 cases 的公共环境：临时数据根 + 引擎 + 进度通道。
 pub(super) struct Harness {
     dir: PathBuf,
@@ -104,7 +107,7 @@ pub(super) struct Fake {
     pub(super) java: Option<JavaRuntime>,
     pub(super) run_error: Option<ProcessorError>,
     calls: RefCell<Vec<&'static str>>,
-    steps: RefCell<Vec<(usize, String, Vec<String>, usize)>>,
+    steps: RefCell<Vec<StepView>>,
 }
 
 impl Fake {
@@ -123,7 +126,7 @@ impl Fake {
     }
 
     /// 被组出来的每步（序号 / 坐标 / 参数 / classpath 条数）。
-    pub(super) fn steps(&self) -> Vec<(usize, String, Vec<String>, usize)> {
+    pub(super) fn steps(&self) -> Vec<StepView> {
         self.steps.borrow().clone()
     }
 }
