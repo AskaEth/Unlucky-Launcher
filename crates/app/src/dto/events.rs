@@ -65,7 +65,7 @@ pub enum CoreEvent {
     DiagnosisReady(DiagnosisReport),
     /// 账户列表刷新
     AccountsChanged(Vec<AccountView>),
-    /// 设备码登录状态刷新
+    /// 微软登录状态刷新
     DeviceLoginChanged(DeviceLoginView),
     /// Java 页快照（发行版/回退链/运行时）
     JavaChanged(JavaPageView),
@@ -129,9 +129,11 @@ pub enum AppCommand {
     RemoveAccount(String),
     /// 切换当前启动账户
     SwitchAccount(String),
-    /// 开始微软设备码登录
+    /// 开始微软设备码登录（CLI/无浏览器场景、备用通道）
     StartDeviceLogin,
-    /// 取消/关掉设备码登录面板（已发出的请求会在收尾时丢弃结果）
+    /// 开始微软授权码登录（拉起系统默认浏览器 + 本地回调，GUI 的默认入口）
+    StartBrowserLogin,
+    /// 取消/关掉微软登录面板（已发出的请求会在收尾时丢弃结果）
     CancelDeviceLogin,
     /// 安装指定发行版的托管 JDK（`temurin` / `oracle` / `microsoft` / `zulu`）
     InstallJava(String),

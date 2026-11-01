@@ -1,4 +1,4 @@
-//! 账户体系：三轨（离线 UUID / 微软 device-code / authlib-injector）、凭据存储边界。
+//! 账户体系：三轨（离线 UUID / 微软 device-code 与授权码 / authlib-injector）、凭据存储边界。
 //!
 //! 设计定稿：`DevDocs/PlanDoc/07-accounts.md`（决策 D9/Q21），协议细节来自
 //! `DevDocs/analyse/04-authentication.md`（HMCL v3.17 拆解，逐报文对照）。
@@ -19,7 +19,8 @@
 //! - [`account`]：`AccountId` / `AccountKind` / `AccountMeta` / `Credentials`（三轨统一抽象）；
 //! - [`store`]：`AccountStore`（加载/增删/落盘，`data/auth/`）；
 //! - [`offline`]：HMCL 兼容离线 UUID + 启动占位；
-//! - [`microsoft`]：device-code 全链（XBL→XSTS→login_with_xbox→entitlements→profile）+ 刷新判定；
+//! - [`microsoft`]：微软两条登录流（device-code / 授权码+本地回调）+ 共用后链
+//!   （XBL→XSTS→login_with_xbox→entitlements→profile）+ 刷新判定；
 //! - [`authlib`]：标准 Yggdrasil 协议（authenticate/refresh/validate/invalidate，账户侧）；
 //! - [`error`]：错误分流（取消 / 超时 / 被拒 / 凭据过期）；
 //! - [`body`]：非 2xx 应答的正文诊断（分类 JSON/HTML/空体 + 脱敏摘要，M38）；
@@ -47,6 +48,8 @@ pub use account::{AccountId, AccountKind, AccountMeta, Credentials};
 pub use body::{BodyKind, ResponseDetail};
 pub use error::{AuthError, AuthResult};
 pub use journal::{AuthFailureEvent, AuthJournal};
-pub use microsoft::{MicrosoftAuth, MicrosoftSession, RefreshDecision, RefreshReason};
+pub use microsoft::{
+    AuthCodePolicy, AuthCodePrompt, MicrosoftAuth, MicrosoftSession, RefreshDecision, RefreshReason,
+};
 pub use secret::Secret;
 pub use store::{AccountStore, AuthPaths};

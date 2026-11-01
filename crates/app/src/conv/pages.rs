@@ -58,7 +58,7 @@ pub fn active_account_name(state: &AppState) -> String {
         .unwrap_or_else(|| "未登录".to_string())
 }
 
-/// 设备码登录面板。
+/// 微软登录面板。
 pub fn device(state: &AppState) -> UiDeviceCode {
     let view = &state.device_login;
     UiDeviceCode {

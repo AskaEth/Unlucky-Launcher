@@ -25,6 +25,7 @@ mod job;
 mod launch;
 mod logs;
 mod meter;
+mod opener;
 mod settings;
 mod versions;
 

@@ -1,4 +1,4 @@
-// 设置 → 账户（D9 / G6）：三轨账户列表 + 离线添加 + 微软设备码登录 + 删除/切换。
+// 设置 → 账户（D9 / G6）：三轨账户列表 + 离线添加 + 微软登录（授权码浏览器 / 设备码）+ 删除/切换。
 //
 // 凭据红线：这里能看到的只有「名字 / 轨道 / 公开 UUID / 登录名 / 创建时间」——
 // token 与密码永远不进 UI（Rust 侧的 AccountView 不含这些字段）。
@@ -72,7 +72,7 @@ export component AccountSection inherits Rectangle {
     background: transparent;
 
     VerticalLayout {
-        // 设备码登录面板（Waiting 时显示用户码 + 链接；失败显示原因）
+        // 微软登录面板（设备码显示用户码；授权码显示可复制的授权链接；失败显示原因）
         if PageState.device.visible : Rectangle {
             height: PageState.device.busy ? 96px : 84px;
             background: PageState.device.phase_label == "失败" ? Theme.state-danger-soft : Theme.accent-soft;
@@ -148,15 +148,22 @@ export component AccountSection inherits Rectangle {
                 placeholder: "玩家名（离线 UUID 自动生成）";
             }
             MetroButton {
-                kind: ButtonKind.accent;
+                kind: ButtonKind.standard;
                 text: "添加离线";
                 button-height: 28px;
                 enabled: PageState.offline-name != "";
                 clicked => { PageState.account-add-offline(PageState.offline-name); }
             }
             MetroButton {
-                kind: ButtonKind.standard;
-                text: "微软登录（设备码）";
+                kind: ButtonKind.accent;
+                text: "微软登录";
+                button-height: 28px;
+                enabled: !PageState.device.busy;
+                clicked => { PageState.msa-browser-begin(); }
+            }
+            MetroButton {
+                kind: ButtonKind.subtle;
+                text: "设备码登录";
                 button-height: 28px;
                 enabled: !PageState.device.busy;
                 clicked => { PageState.msa-begin(); }

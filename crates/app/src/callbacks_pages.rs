@@ -58,6 +58,14 @@ pub(crate) fn wire_pages(weak: Weak<Inner>) {
     }
     {
         let weak = weak.clone();
+        page.on_msa_browser_begin(move || {
+            let Some(this) = weak.upgrade() else { return };
+            this.dispatch(AppCommand::StartBrowserLogin);
+            this.sync();
+        });
+    }
+    {
+        let weak = weak.clone();
         page.on_msa_cancel(move || {
             let Some(this) = weak.upgrade() else { return };
             this.dispatch(AppCommand::CancelDeviceLogin);

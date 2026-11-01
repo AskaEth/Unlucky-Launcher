@@ -1,4 +1,4 @@
-//! 账户页 DTO：三条轨道的统一抽象 + 微软设备码登录的可见状态。
+//! 账户页 DTO：三条轨道的统一抽象 + 微软登录（设备码 / 授权码浏览器）的可见状态。
 //!
 //! **凭据红线**：本模块（以及整个 `crate::dto`）只有 [`AccountView`] 这种公开字段视图。
 //! `core::auth` 的 `Credentials` / `MicrosoftSession` / token 永远不进 app 层——
@@ -65,7 +65,7 @@ pub struct AccountView {
     pub active: bool,
 }
 
-/// 设备码登录阶段（UI 据此切换面板）。
+/// 微软登录阶段（UI 据此切换面板；两条流共用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeviceLoginPhase {
     /// 没有登录在进行
@@ -160,6 +160,33 @@ impl DeviceLoginView {
         }
     }
 
+    /// 授权码流：本地回调已就绪、浏览器已拉起（`present` 回调时刻）。
+    ///
+    /// 面板不展示用户码，改展示**可复制的授权链接**（用户可能需要在另一台设备/
+    /// 另一个浏览器里手动打开）；`warning` 是「浏览器没拉起来」这类非致命提示。
+    pub fn browser_waiting(
+        authorization_url: &str,
+        expires_in: u64,
+        warning: Option<&str>,
+    ) -> Self {
+        let mut message = format!(
+            "已在系统浏览器打开微软登录页，请完成授权（{} 秒内有效）；没弹出就把下面的链接粘到浏览器里",
+            expires_in.max(1)
+        );
+        if let Some(warning) = warning {
+            message.push_str(&format!("（{warning}）"));
+        }
+        Self {
+            phase: DeviceLoginPhase::Waiting,
+            user_code: String::new(),
+            verification_uri: authorization_url.to_string(),
+            qr_link: authorization_url.to_string(),
+            expires_in,
+            message,
+            account_name: String::new(),
+        }
+    }
+
     /// 失败态。
     pub fn failed(message: impl Into<String>) -> Self {
         Self {
@@ -209,6 +236,25 @@ mod tests {
                 !json.to_lowercase().contains(forbidden),
                 "视图里不该出现 {forbidden}"
             );
+        }
+    }
+
+    #[test]
+    fn browser_waiting_shows_a_copyable_link_instead_of_a_user_code() {
+        let view = DeviceLoginView::browser_waiting(
+            "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=x",
+            300,
+            Some("拉起浏览器失败"),
+        );
+        assert_eq!(view.phase, DeviceLoginPhase::Waiting);
+        assert!(view.phase.busy());
+        assert!(view.user_code.is_empty(), "授权码流没有用户码");
+        assert_eq!(view.qr_link, view.verification_uri);
+        assert!(view.message.contains("浏览器"));
+        assert!(view.message.contains("拉起浏览器失败"), "{}", view.message);
+        let json = serde_json::to_string(&view).expect("序列化");
+        for forbidden in ["refresh", "mc-access"] {
+            assert!(!json.contains(forbidden), "视图里不该出现 {forbidden}");
         }
     }
 

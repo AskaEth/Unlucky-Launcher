@@ -113,7 +113,7 @@ pub struct AppState {
     pub download_query: String,
     /// 账户列表（三轨统一视图；凭据不在其中）
     pub accounts: Vec<AccountView>,
-    /// 微软设备码登录状态
+    /// 微软登录状态
     pub device_login: DeviceLoginView,
     /// Java 页快照（发行版 / 回退链 / 运行时）
     pub java: JavaPageView,
