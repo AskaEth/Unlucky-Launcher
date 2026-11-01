@@ -304,6 +304,13 @@ fn install_loader(
         vanilla.loader = LoaderKind::Vanilla;
         install_vanilla(job, engine, &vanilla)?;
     }
+    // 两段（加载器库 + 处理器依赖库）在动手前一次预记账：进度条只走一条单调曲线，
+    // 处理器依赖库下完不会先满格、再在加载器库开始时回落到一半。
+    {
+        let mut guard = job.meter.lock().map_err(|_| "进度锁失效".to_string())?;
+        let (bytes, _) = plan.install.total_bytes();
+        guard.expect(plan.files().len(), bytes);
+    }
     // Forge/NeoForge：installer processors 必须先跑完，`execute` 才允许写版本 JSON。
     if release.requires_installer() {
         let input = StageInput {
@@ -327,9 +334,6 @@ fn install_loader(
     }
     {
         let mut guard = job.meter.lock().map_err(|_| "进度锁失效".to_string())?;
-        guard.progress.files_total += u64::try_from(plan.files().len()).unwrap_or(u64::MAX);
-        let (bytes, _) = plan.install.total_bytes();
-        guard.progress.bytes_total = guard.progress.bytes_total.max(bytes);
         guard.stage(
             InstallStage::Downloading,
             &format!("开始下载加载器库（{} 个文件）…", plan.files().len()),

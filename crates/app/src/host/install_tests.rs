@@ -69,6 +69,71 @@ fn request(loader: LoaderKind, version: &str) -> CreateRequest {
     }
 }
 
+/// 一个「刚下完」的文件结局（记账用）。
+fn downloaded(bytes: u64) -> FileOutcome {
+    FileOutcome {
+        role: FileRole::Library,
+        name: "lib.jar".to_string(),
+        dest: PathBuf::from("lib.jar"),
+        status: FileStatus::Downloaded,
+        bytes,
+        source: None,
+        failure: None,
+    }
+}
+
+#[test]
+fn progress_is_pre_accounted_across_segments_so_the_bar_never_snaps_to_full() {
+    // M45 r1 P2-2 的回归：处理器依赖库下完那一刻，面板曾显示 36/36 满格 + 3.4MB/10MB，
+    // 之后加载器库的 29 个文件才被计入 → 进度条从 100% 回落到 55% 再涨回去。
+    let request = request(LoaderKind::Forge, "1.20.1");
+    let mut meter = Meter::new(&request);
+
+    // 原版段：30 个文件全下完（install_vanilla 对总量是赋值，不是累加）
+    meter.progress.files_total = 30;
+    meter.progress.bytes_total = 3_000_000;
+    for _ in 0..30 {
+        meter.note(&downloaded(100_000));
+    }
+    assert!((meter.progress.ratio() - 1.0).abs() < f32::EPSILON);
+
+    // install_loader 的顺序：加载器库与处理器依赖库都在动手前一次预记账
+    meter.expect(29, 10_000_000);
+    meter.expect(36, 4_000_000);
+    assert_eq!(meter.progress.files_total, 95, "两段之和一次到位");
+    assert_eq!(
+        meter.progress.bytes_total, 17_000_000,
+        "字节是相加不是取最大"
+    );
+    assert!(
+        meter.progress.ratio() < 0.7,
+        "预记账后不能还停在满格：{}",
+        meter.progress.ratio()
+    );
+
+    // 处理器依赖库 36 个下完 → 仍没满格（加载器库还在后面）
+    for _ in 0..36 {
+        meter.note(&downloaded(110_000));
+    }
+    let ratio = meter.progress.ratio();
+    assert!(
+        (0.6..1.0).contains(&ratio),
+        "回落到中间态而不是满格：{ratio}"
+    );
+    assert!(
+        meter.progress.bytes_done < meter.progress.bytes_total,
+        "字节总量要覆盖已下载量：{}/{}",
+        meter.progress.bytes_done,
+        meter.progress.bytes_total
+    );
+
+    // 加载器库也下完 → 这时候才该是满格
+    for _ in 0..29 {
+        meter.note(&downloaded(340_000));
+    }
+    assert!((meter.progress.ratio() - 1.0).abs() < f32::EPSILON);
+}
+
 #[test]
 fn loader_support_matrix_is_explicit() {
     // M45 语义变更：Forge/NeoForge 从「GUI 显式拒装」扩进受支持集合（走 installer processors）。

@@ -196,8 +196,8 @@ export component NewInstanceWizard inherits Rectangle {
                     LoaderChoice { index: 0; label: "原版（Vanilla）"; hint: "不装加载器，最快最稳"; picked => { PageState.wizard-select-loader(0); } }
                     LoaderChoice { index: 1; label: "Fabric"; hint: "轻量模组加载器（GUI 可直接装）"; picked => { PageState.wizard-select-loader(1); } }
                     LoaderChoice { index: 2; label: "Quilt"; hint: "Fabric 的分支（GUI 可直接装）"; picked => { PageState.wizard-select-loader(2); } }
-                    LoaderChoice { index: 3; label: "Forge"; hint: "需要 installer processors：本轮请用 ull install"; picked => { PageState.wizard-select-loader(3); } }
-                    LoaderChoice { index: 4; label: "NeoForge"; hint: "需要 installer processors：本轮请用 ull install"; picked => { PageState.wizard-select-loader(4); } }
+                    LoaderChoice { index: 3; label: "Forge"; hint: "需要 installer processors（首装会外调 java，约 1–3 分钟）"; picked => { PageState.wizard-select-loader(3); } }
+                    LoaderChoice { index: 4; label: "NeoForge"; hint: "需要 installer processors（首装会外调 java，约 1–3 分钟）"; picked => { PageState.wizard-select-loader(4); } }
                 }
 
                 // ③ 名字

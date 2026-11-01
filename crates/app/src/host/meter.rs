@@ -37,6 +37,16 @@ impl Meter {
         self.previous = None;
     }
 
+    /// 预记账一段待下载的文件（文件数 + 字节）。
+    ///
+    /// 一次安装可能分几段（原版 / 处理器依赖库 / 加载器库）：每段开工前都先记账，
+    /// 整条进度曲线才是单调的——某一段下完不会先到 100%，再因为下一段的文件被计入而回落。
+    pub(super) fn expect(&mut self, files: usize, bytes: u64) {
+        let files = u64::try_from(files).unwrap_or(u64::MAX);
+        self.progress.files_total = self.progress.files_total.saturating_add(files);
+        self.progress.bytes_total = self.progress.bytes_total.saturating_add(bytes);
+    }
+
     /// 记账一个文件的结局。
     pub(super) fn note(&mut self, outcome: &FileOutcome) {
         self.progress.files_done += 1;

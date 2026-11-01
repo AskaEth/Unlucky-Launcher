@@ -146,9 +146,7 @@ impl Reporter<'_> {
         let Ok(mut guard) = self.meter.lock() else {
             return;
         };
-        let files = u64::try_from(files).unwrap_or(u64::MAX);
-        guard.progress.files_total = guard.progress.files_total.saturating_add(files);
-        guard.progress.bytes_total = guard.progress.bytes_total.saturating_add(bytes);
+        guard.expect(files, bytes);
     }
 
     /// 失败留痕（文案由调用方决定怎么呈现；这里只保证日志里有一条）。
