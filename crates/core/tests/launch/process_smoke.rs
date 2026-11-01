@@ -111,6 +111,46 @@ fn stop_kills_process_tree() {
     assert!(!child.is_running());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn spawn_puts_child_in_its_own_process_group() {
+    /// `/proc/<pid>/stat` 里的 `pgrp` 字段。
+    fn pgid(pid: u32) -> u32 {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("读 /proc stat");
+        let tail = &stat[stat.rfind(')').expect("stat 应有 comm 括号") + 1..];
+        tail.split_whitespace()
+            .nth(2)
+            .expect("stat 应有 pgrp 字段")
+            .parse()
+            .expect("pgrp 应是数字")
+    }
+
+    let mut child = RunningProcess::spawn(
+        &shell_command("sleep 30"),
+        None,
+        Arc::new(NullSink),
+        config(),
+    )
+    .expect("spawn 应成功");
+    let pid = child.pid();
+    let own_pgid = pgid(std::process::id());
+
+    assert_eq!(
+        pgid(pid),
+        pid,
+        "子进程应是自己的进程组组长（process_group(0)）"
+    );
+    assert_ne!(pgid(pid), own_pgid, "子进程不能挂在测试进程的进程组上");
+    assert_eq!(
+        unlucky_core::launch::tree_kill::group_kill_target(pid),
+        Some(pid),
+        "独立组的组长才是合法的组杀目标"
+    );
+
+    child.stop().expect("停止应成功");
+    let _ = child.wait();
+}
+
 #[test]
 fn spawn_reports_missing_program() {
     let mut command = shell_command("echo hi");

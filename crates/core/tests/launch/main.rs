@@ -13,3 +13,4 @@ mod process_smoke;
 mod pump_buffer;
 mod session_events;
 mod sink_cases;
+mod tree_kill_cases;

@@ -81,6 +81,15 @@ impl RunningProcess {
             const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
             process.creation_flags(CREATE_NEW_PROCESS_GROUP);
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // 与 Windows 的 CREATE_NEW_PROCESS_GROUP 对称：子进程自成一个进程组，
+            // `tree_kill` 的 `kill -- -<pgid>` 才能覆盖整棵子树。`process_group` 是
+            // std 1.64+ 的**安全** API，不需要 pre_exec / unsafe（旧注释说“unsafe 被挡”已过时）。
+            // 参数 0 = `pgid = 子进程 pid`。
+            process.process_group(0);
+        }
 
         let mut child = process.spawn().map_err(|source| LaunchError::Spawn {
             program: command.program.clone(),
