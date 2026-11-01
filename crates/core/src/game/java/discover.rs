@@ -186,13 +186,24 @@ pub fn dedupe(runtimes: Vec<JavaRuntime>) -> Vec<JavaRuntime> {
     kept
 }
 
-/// 去重键：去掉 Windows 的 `\\?\` 前缀、统一分隔符、大小写不敏感（Windows）。
+/// 去重键：剥掉 Windows 的 `\\?\` 前缀、分隔符一律折成 `/`、大小写只在 Windows 折叠。
+///
+/// 前两步与平台无关：同一条 `bin/java[.exe]` 用 `/` 还是 `\` 拼出来都是同一个文件，
+/// 键必须相同——`JAVA_HOME` 的写法与扫盘拼出来的路径常在这点上不一致，键不齐就重复列。
+/// 大小写折叠**只能**跟着平台走：NTFS 不区分大小写，而 POSIX 上 `Java` 与 `java` 是两个
+/// 目录，折了会把两份真实安装误并成一个。
+///
+/// 代价（已知且有意的取舍）：POSIX 上文件名里的字面反斜杠也会被当分隔符。JDK 安装路径带
+/// 反斜杠属于病态情况，换来的是「同一条 java 的两种拼法永远同键」这条平台无关的不变量。
 #[must_use]
 pub fn path_key(path: &Path) -> String {
     let text = path.display().to_string();
-    let text = text.strip_prefix(r"\\?\").unwrap_or(&text).to_string();
+    let text = text
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&text)
+        .replace('\\', "/");
     if cfg!(windows) {
-        text.replace('/', "\\").to_ascii_lowercase()
+        text.to_ascii_lowercase()
     } else {
         text
     }
@@ -236,11 +247,56 @@ mod tests {
     }
 
     #[test]
-    fn path_key_normalises_separators() {
-        let left = path_key(std::path::Path::new("C:/a/b/java.exe"));
-        let right = path_key(std::path::Path::new("C:\\a\\b\\java.exe"));
-        assert_eq!(left, right);
-        assert!(!path_key(std::path::Path::new(r"\\?\C:\a\java.exe")).starts_with(r"\\"));
+    fn path_key_normalises_separators_on_every_platform() {
+        // 平台无关的不变量：同一条 `bin/java` 用 `/` 还是 `\` 拼出来，键必须相同。
+        // （M49：原来这里只在 Windows 上成立，Linux 上 `\` 原样留着 → 断言挂。）
+        let forward = path_key(std::path::Path::new("C:/a/b/java.exe"));
+        let backward = path_key(std::path::Path::new("C:\\a\\b\\java.exe"));
+        assert_eq!(forward, backward);
+        assert!(
+            !forward.contains('\\'),
+            "键里不该残留反斜杠（与平台无关）：{forward}"
+        );
+        assert!(
+            !forward.starts_with(r"\\"),
+            "`\\\\?\\` 前缀不进键：{forward}"
+        );
+    }
+
+    #[test]
+    fn one_install_normalises_to_one_key_whatever_the_spelling() {
+        // 回归钉子：`JAVA_HOME` 与扫盘常对同一个 java 给出不同写法，四种拼法必须同键。
+        let spellings = [
+            "C:/Program Files/Java/jdk-21/bin/java.exe",
+            r"C:\Program Files\Java\jdk-21\bin\java.exe",
+            r"\\?\C:\Program Files\Java\jdk-21\bin\java.exe",
+            r"C:\Program Files\Java\jdk-21/bin/java.exe",
+        ];
+        let key = path_key(std::path::Path::new(spellings[0]));
+        for spelling in spellings {
+            assert_eq!(
+                path_key(std::path::Path::new(spelling)),
+                key,
+                "同一安装的两种写法必须同键：{spelling}"
+            );
+        }
+    }
+
+    #[test]
+    fn path_key_folds_case_only_where_the_filesystem_does() {
+        // 大小写折叠跟平台走，两侧都钉住：NTFS 不区分大小写 → 折；
+        // POSIX 上 `Java` 与 `java` 是两个目录 → 不折（折了会把两份真实安装误并）。
+        let upper = path_key(std::path::Path::new(
+            "C:/Program Files/Java/jdk-21/bin/java.exe",
+        ));
+        let lower = path_key(std::path::Path::new(
+            "c:/program files/java/jdk-21/bin/java.exe",
+        ));
+        if cfg!(windows) {
+            assert_eq!(upper, lower, "Windows：大小写不同的同一路径应同键");
+        } else {
+            assert_ne!(upper, lower, "POSIX：大小写是有效区别，不应同键");
+        }
     }
 
     #[test]
