@@ -1,11 +1,16 @@
 name: Release
 
 # 发布流水线：tag `v*` → 三平台（四槽位）矩阵构建 → 单文件产物 + SHA256SUMS
-# → 上传 artifact + 创建 GitHub Release（pre-release 默认开）。
+# → 上传 artifact + 创建 GitHub Release（pre-release 默认开）。同一 tag 重跑幂等：
+# Release 已存在时覆盖资产与说明，不再 `gh release create`（见 release job 末步）。
 #
 # 契约唯一真相源：packaging/README.md（命名/目录/运行时依赖）。
 # 打包本体在 packaging/make_artifacts.py（本地与 CI 同一份脚本，逐字节同布局）。
-# 手动触发（workflow_dispatch）只跑构建不建 Release —— 用来验证矩阵仍然编得过。
+# 手动触发（workflow_dispatch）默认只跑构建不建 Release —— 用来验证矩阵仍然编得过。
+# 注意 `inputs.prerelease` 只在 **tag ref** 上 dispatch 才可达：Actions 页面的
+# "Run workflow" 只能选分支，要跑 tag 得 `gh workflow run release.yml --ref v0.1.0`。
+# 分支 ref 的 dispatch 与 push 事件一样被 release job 的 `if: github.ref_type == 'tag'`
+# 挡在发布之外，所以「dispatch 只构建不发布」与「dispatch 可关 pre-release」并不矛盾。
 
 on:
   push:
@@ -14,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       prerelease:
-        description: "标记为 pre-release"
+        description: "标记为 pre-release（仅在 tag ref 上 dispatch 时才生效）"
         type: boolean
         default: true
 
@@ -81,9 +86,11 @@ jobs:
           if [ -z "$DUMPBIN" ]; then
             DUMPBIN=$(ls -d "C:/Program Files/Microsoft Visual Studio/"*/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe 2>/dev/null | head -n1 || true)
           fi
+          # 工具缺失同样 fail：windows-latest 自带 VS 工具链，基本找得到；
+          # "找不到就跳过"等于让这道门禁在最需要它的时候静默失效。
           if [ -z "$DUMPBIN" ]; then
-            echo "::warning::找不到 dumpbin，跳过导入表自检（不阻塞发布）"
-            exit 0
+            echo "::error::找不到 dumpbin，无法校验导入表（静态 CRT 门禁不降级）"
+            exit 1
           fi
           "$DUMPBIN" -nologo -dependents target/release/unlucky-launcher.exe | tee dependents.txt
           if grep -Eiq 'VCRUNTIME|MSVCP|MSVCR|ucrtbase\.dll' dependents.txt; then
@@ -93,13 +100,17 @@ jobs:
 
       - name: 打包（产物 + SHA256SUMS）
         shell: bash
+        env:
+          # 不把 `${{ }}` 直接拼进 bash 脚本：git ref 名允许 `$`/反引号/`"`，一律经 env 传入再展开。
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           # git-bash 与 Linux/macOS runner 的 python 入口名不一致，先探一遍。
           PY=$(command -v python3 || command -v python)
           args=()
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            args+=(--version "${{ github.ref_name }}")   # 与 Cargo.toml 版本交叉校验
+          if [ "$REF_TYPE" = "tag" ]; then
+            args+=(--version "$TAG")   # 与 Cargo.toml 版本交叉校验
           fi
           "$PY" packaging/make_artifacts.py "${args[@]}" --out dist
           ls -l dist
@@ -179,7 +190,7 @@ jobs:
           print(body[:400])
           PY
 
-      - name: 创建 GitHub Release（pre-release 默认开）
+      - name: 创建或更新 GitHub Release（同 tag 重跑幂等）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
@@ -193,8 +204,12 @@ jobs:
           fi
           # Windows 单 exe 装不下 LICENSE/NOTICE/README.md，这三份与产物并列挂到 Release 上，
           # 保证每个下载平台的许可条款都随包分发。
-          gh release create "$TAG" \
-            dist/unlucky-launcher-* \
-            dist/SHA256SUMS.txt \
-            LICENSE NOTICE README.md \
-            "${flags[@]}"
+          assets=(dist/unlucky-launcher-* dist/SHA256SUMS.txt LICENSE NOTICE README.md)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # 同 tag 重跑（补丁 / 重编）：Release 已存在 → 覆盖资产 + 刷新说明，
+            # 不再 `create`（那会因已存在而失败，把整条流水线在最后一步染红）。
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" "${flags[@]}"
+          else
+            gh release create "$TAG" "${assets[@]}" "${flags[@]}"
+          fi
