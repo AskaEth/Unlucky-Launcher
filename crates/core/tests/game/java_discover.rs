@@ -96,17 +96,20 @@ fn scanned_java_is_still_used_when_nothing_else_matches() {
 #[test]
 fn dedupe_collapses_one_install_found_twice() {
     // `JAVA_HOME` 指向 Program Files 里的 JDK → 同一个 java 不应列两次。
+    // 第二条的「另一种写法」随平台给：Windows 上大小写和分隔符都可能不一致（NTFS 不区分
+    // 大小写），POSIX 上大小写是有效区别，只能靠分隔符拼出同一路径的第二种写法。
+    let duplicate = if cfg!(windows) {
+        "c:/program files/java/jdk-21/bin/java.exe"
+    } else {
+        "C:\\Program Files\\Java\\jdk-21/bin/java.exe"
+    };
     let candidates = discover::dedupe(vec![
         runtime(
             "C:/Program Files/Java/jdk-21/bin/java.exe",
             21,
             JavaOrigin::JavaHome,
         ),
-        runtime(
-            "c:/program files/java/jdk-21/bin/java.exe",
-            21,
-            JavaOrigin::System,
-        ),
+        runtime(duplicate, 21, JavaOrigin::System),
     ]);
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].origin, JavaOrigin::JavaHome);
