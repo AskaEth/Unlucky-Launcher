@@ -24,6 +24,8 @@ pub struct ShotOptions {
     pub wizard: bool,
     /// 发起一次真实安装并停 `dwell_ms` 后取图（中间态）
     pub install: Option<String>,
+    /// 安装走哪个加载器（`--screenshot-loader forge`；缺省 = 原版）
+    pub loader: Option<String>,
     /// 发起一次真实启动并停 `dwell_ms` 后取图（中间态）
     pub launch: Option<String>,
     /// 打开一个日志会话（日志页有数据态：日志行 + 诊断卡片）
@@ -58,6 +60,7 @@ pub fn shot_options() -> Option<ShotOptions> {
         },
         wizard: flag("--screenshot-wizard"),
         install: value_of("--screenshot-install"),
+        loader: value_of("--screenshot-loader"),
         launch: value_of("--screenshot-launch"),
         session: value_of("--screenshot-session"),
         dwell_ms: value_of("--screenshot-dwell")
@@ -92,7 +95,7 @@ pub fn capture(app: &AppUi, options: &ShotOptions) -> Result<(), slint::Platform
     }
     if let Some(version) = &options.install {
         app.dispatch_and_run(
-            AppCommand::InstallVersion(version.clone()),
+            install_command(version, options.loader.as_deref()),
             options.dwell_ms,
         );
     }
@@ -113,6 +116,20 @@ pub fn capture(app: &AppUi, options: &ShotOptions) -> Result<(), slint::Platform
         app.dispatch_and_run(AppCommand::StopInstance(instance.clone()), 1_500);
     }
     Ok(())
+}
+
+/// 截图通道的安装指令：缺省原版，给了 `--screenshot-loader` 就走向导同一条路
+/// （`CreateInstance`），因此 Forge/NeoForge 的中间态也能取图。
+fn install_command(version: &str, loader: Option<&str>) -> AppCommand {
+    match loader.map(crate::dto::LoaderKind::parse) {
+        Some(Some(kind)) => AppCommand::CreateInstance(crate::dto::CreateRequest {
+            version: version.to_string(),
+            loader: kind,
+            loader_version: String::new(),
+            name: version.to_string(),
+        }),
+        _ => AppCommand::InstallVersion(version.to_string()),
+    }
 }
 
 /// `--flag` 是否存在。

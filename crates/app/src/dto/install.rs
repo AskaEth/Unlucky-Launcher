@@ -31,7 +31,7 @@ impl InstallStage {
         match self {
             Self::Planning => "解析版本",
             Self::Downloading => "下载文件",
-            Self::Installing => "写入版本",
+            Self::Installing => "生成版本",
             Self::Registering => "登记实例",
             Self::Done => "已完成",
             Self::Failed => "失败",
