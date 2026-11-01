@@ -1,0 +1,200 @@
+name: Release
+
+# 发布流水线：tag `v*` → 三平台（四槽位）矩阵构建 → 单文件产物 + SHA256SUMS
+# → 上传 artifact + 创建 GitHub Release（pre-release 默认开）。
+#
+# 契约唯一真相源：packaging/README.md（命名/目录/运行时依赖）。
+# 打包本体在 packaging/make_artifacts.py（本地与 CI 同一份脚本，逐字节同布局）。
+# 手动触发（workflow_dispatch）只跑构建不建 Release —— 用来验证矩阵仍然编得过。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "标记为 pre-release"
+        type: boolean
+        default: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.slot }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows：MSVC + 静态 CRT（+crt-static）→ exe 不依赖 VC++ 可再发行包，
+          # 双击即用的单文件形态；UCRT 本身就是 Win10+ 的系统组件。
+          - slot: windows-x64
+            os: windows-latest
+            rustflags: -C target-feature=+crt-static
+          # Linux：固定 ubuntu-22.04（glibc 2.35 地板）而不是 latest，
+          # 否则产物的 glibc 底线会跟着 runner 漂移（24.04 = 2.39）。
+          - slot: linux-x64
+            os: ubuntu-22.04
+          # macOS：latest = arm64；Intel x64 用 macos-15-intel（macos-13 已下线）。
+          - slot: macos-arm64
+            os: macos-latest
+          - slot: macos-x64
+            os: macos-15-intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux 图形栈构建依赖（winit / femtovg 编译期需要）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libwayland-dev libxcb1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --release --locked
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --release --locked --bin unlucky-launcher --bin ull
+
+      - name: Windows 单文件自检（导入表不得出现 VC++ 可再发行 DLL）
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # +crt-static 是否真的生效，只看导入表：出现 VCRUNTIME/MSVCP/msvcr/ucrtbase 说明还得装
+          # 可再发行包，那就不是"单文件"了，直接 fail。
+          DUMPBIN=$(command -v dumpbin || true)
+          if [ -z "$DUMPBIN" ]; then
+            DUMPBIN=$(ls -d "C:/Program Files/Microsoft Visual Studio/"*/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe 2>/dev/null | head -n1 || true)
+          fi
+          if [ -z "$DUMPBIN" ]; then
+            echo "::warning::找不到 dumpbin，跳过导入表自检（不阻塞发布）"
+            exit 0
+          fi
+          "$DUMPBIN" -nologo -dependents target/release/unlucky-launcher.exe | tee dependents.txt
+          if grep -Eiq 'VCRUNTIME|MSVCP|MSVCR|ucrtbase\.dll' dependents.txt; then
+            echo "::error::静态 CRT 未生效：exe 仍动态依赖 VC++ 可再发行包"
+            exit 1
+          fi
+
+      - name: 打包（产物 + SHA256SUMS）
+        shell: bash
+        run: |
+          set -euo pipefail
+          # git-bash 与 Linux/macOS runner 的 python 入口名不一致，先探一遍。
+          PY=$(command -v python3 || command -v python)
+          args=()
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            args+=(--version "${{ github.ref_name }}")   # 与 Cargo.toml 版本交叉校验
+          fi
+          "$PY" packaging/make_artifacts.py "${args[@]}" --out dist
+          ls -l dist
+
+      - name: 归档内容自检（二进制定位 + 合规文本）
+        shell: bash
+        run: |
+          set -euo pipefail
+          for archive in dist/*.tar.gz; do
+            [ -e "$archive" ] || continue
+            listing=$(tar -tzf "$archive")
+            for required in unlucky-launcher LICENSE NOTICE README.md; do
+              if ! grep -q "/$required$" <<<"$listing"; then
+                echo "::error file=$archive::$archive 缺少 $required"
+                exit 1
+              fi
+            done
+            echo "OK: $archive 含二进制与 LICENSE/NOTICE/README.md"
+          done
+          if ls dist/*.exe >/dev/null 2>&1; then
+            echo "Windows 单 exe 形态：LICENSE/NOTICE/README.md 作为 Release 资产并列分发"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.slot }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: GitHub Release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 矩阵完整性 + 重算全量 SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l dist
+          for slot in windows-x64 linux-x64 macos-arm64 macos-x64; do
+            if ! compgen -G "dist/*-$slot*" >/dev/null; then
+              echo "::error::矩阵缺产物：$slot"
+              exit 1
+            fi
+          done
+          # 各平台任务各写一份 SHA256SUMS.txt，合并后只有一份是真的 —— 在 Release 侧重算。
+          cd dist
+          rm -f SHA256SUMS.txt
+          sha256sum unlucky-launcher-* > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: 生成 Release 说明（支持矩阵模板）
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib
+          version = os.environ["TAG"].lstrip("v")
+          template = pathlib.Path("packaging/release-notes.md").read_text(encoding="utf-8")
+          sums = pathlib.Path("dist/SHA256SUMS.txt").read_text(encoding="utf-8").strip()
+          body = template.replace("{{VERSION}}", version).replace("{{SUMS}}", sums)
+          pathlib.Path("release-body.md").write_text(body, encoding="utf-8", newline="\n")
+          print(body[:400])
+          PY
+
+      - name: 创建 GitHub Release（pre-release 默认开）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=(--title "Unlucky Launcher $TAG" --notes-file release-body.md)
+          if [ "${PRERELEASE:-true}" != "false" ]; then
+            flags+=(--prerelease)
+          fi
+          # Windows 单 exe 装不下 LICENSE/NOTICE/README.md，这三份与产物并列挂到 Release 上，
+          # 保证每个下载平台的许可条款都随包分发。
+          gh release create "$TAG" \
+            dist/unlucky-launcher-* \
+            dist/SHA256SUMS.txt \
+            LICENSE NOTICE README.md \
+            "${flags[@]}"
