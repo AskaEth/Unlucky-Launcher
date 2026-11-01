@@ -26,6 +26,7 @@ with the download on every platform.
 | Linux x64, X11 | first class | `libxkbcommon`, `fontconfig`, `libGL` (or software renderer), `libxcb` |
 | Linux x64, Wayland | supported | `wayland-client`, `libxkbcommon`, plus the X11 set for XWayland apps |
 | Windows 8.1/8/7 | unsupported | baseline was raised to Win10 (decision D21) |
+| Android — Termux + X11 | experimental, not promised | CLI only (build from source), GUI unverified; not part of this release matrix |
 
 ## Install
 

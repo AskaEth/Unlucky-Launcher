@@ -55,11 +55,24 @@ python packaging/make_artifacts.py --no-smoke         # 跳过 ull --version 冒
 `.github/workflows/release.yml`：
 
 - 触发：`push` tag `v*`；`workflow_dispatch` 只构建不发布（验证矩阵仍编得过）。
+  `inputs.prerelease` **只在 tag ref 上 dispatch 才可达**——Actions 页面的 "Run workflow" 只能选分支，
+  要跑 tag 得 `gh workflow run release.yml --ref v0.1.0`。分支 ref 的 dispatch 与 push 一样被
+  `release` job 的 `if: github.ref_type == 'tag'` 挡在发布之外，所以「dispatch 只构建不发布」
+  与「dispatch 能关 pre-release」是两条互不冲突的规则。
 - 矩阵：`windows-latest`（MSVC + `-C target-feature=+crt-static`）、`ubuntu-22.04`（glibc 2.35 地板）、
   `macos-latest`（arm64）、`macos-15-intel`（Intel x64；`macos-13` 已下线，`macos-26-intel` 为更新替位）。
 - 每个槽位 `cargo build --release --locked` → `make_artifacts.py` → 归档内容自检 → 上传 artifact。
 - `release` job：下载全部 artifact → 重算一份全量 `SHA256SUMS.txt` → 用 `packaging/release-notes.md`
-  模板渲染支持矩阵 → `gh release create`（**pre-release 默认开**，`workflow_dispatch` 可关）。
+  模板渲染支持矩阵 → `gh release create`（**pre-release 默认开**：首建时 `push` 触发按 pre-release，`workflow_dispatch` 可关）。
+- **同一 tag 重跑幂等**：`gh release view` 命中已存在的 Release 时改走 `gh release upload --clobber`
+  + `gh release edit`，覆盖资产与说明而不是再 `create`（`create` 遇已存在会失败，把流水线最后一步染红）。
+- **pre-release 标记只按显式输入断言**：`gh release edit` 分支在默认重跑（`push` 触发的 Re-run，
+  `inputs.prerelease` 为空）时**不传** `--prerelease`，所以重跑**不会**翻转标记；只有 tag ref 上的
+  `workflow_dispatch` 显式给了输入才断言——`prerelease=true` → `--prerelease`，`prerelease=false` →
+  `--prerelease=false`。要改标记两条路等价且互不打架：① 走流水线
+  `gh workflow run release.yml --ref v0.1.0 -f prerelease=false`（会落到 edit 分支显式断言）
+  ② 直接 `gh release edit <tag> --prerelease=false`（不经流水线；后续默认重跑不碰该标记，
+  不会被翻回去）。首建（`create`）仍保持「pre-release 默认开」的老契约，空输入按 `true` 处理。
 
 Windows 为什么用 MSVC 静态 CRT 而不是本机这套 GNU 工具链：两者都属"标准工具链"（D21），
 但发布产物要**不依赖 VC++ 可再发行包**，`+crt-static` 把 CRT 静态链进 exe，Win10+ 的 UCRT 本身是
@@ -132,7 +145,11 @@ strip = "symbols"    # 剥符号表（GNU/MSVC 路径都生效）
 ```
 
 取舍：`lto = "fat"` + `codegen-units = 1` 让 release 链接明显变慢（本机全量 release 构建 10 分钟量级，
-见 §7.1），换来的是体积与启动时间；开发迭代走 `cargo build`（dev profile）完全不受影响。
+见 §7.1），换来的是体积与启动时间。变慢的根源在 `codegen-units = 1`：整个 crate 只切出一个 CGU，
+LTO 也就只有一个线程可跑（`fat` 本身只管"跨 crate 全量参与"，不等于单线程）。
+本地开发迭代走 `cargo build`（dev profile）不受影响，但 **`ci.yml` 每次 push/PR 都跑
+`cargo build --workspace --release`**，会实打实吃这份 fat LTO 的链接时间——CI 慢的一部分是 release
+档构建，不是测试本身。
 `panic = "abort"` 意味着 panic 不带 backtrace 栈展开——UI 层已用 `Result` 承接错误，
 `unwrap` 只出现在测试里，这是可接受的取舍。
 
@@ -152,7 +169,8 @@ strip = "symbols"    # 剥符号表（GNU/MSVC 路径都生效）
 
 `fat` 相对 `thin` 的实测差：GUI **−1,770,496 B（−10.8%）**，CLI **−1,415,168 B（−18.7%）**。
 一次全量 LTO 把跨 crate 的死代码与重复实例化一起消掉，收益远超常见印象里的"1~2%"；
-代价是 release 链接更慢（`fat` 是全局单线程 LTO），只影响发布/验收构建，日常 `cargo build` 走 dev profile 不受影响。
+代价是 release 链接更慢——慢在 `codegen-units = 1`（单 CGU → LTO 单线程），不是 `fat` 本身，
+且只影响发布/验收构建，日常 `cargo build` 走 dev profile 不受影响。
 
 体积构成（按依赖树判断）：Slint 运行时（femtovg + software 双渲染器 + winit/accesskit/托盘）+ rustls/reqwest
 + rig/rmcp/axum 是主要来源；`ull` 明显更小是 D18 纪律的直接结果（CLI 零 UI 框架依赖）。
@@ -177,6 +195,13 @@ unlucky-launcher-0.1.0-windows-x64.exe: OK
 
 版本守卫也实测过：`--version v9.9.9` 时脚本以 `tag/version mismatch: requested 9.9.9, Cargo.toml says 0.1.0` 失败退出（exit 1）。
 
+UNIX 归档的可复现性单独取证（本机 Windows 槽位只走裸 exe 分支，tar 路径要另测）：
+reviewer-packaging 在 M46 review 里连续调 `stage_archive()` 两次 → **两次 sha256 完全一致**
+`a99d6e9e727cd7e390434c566a15978451f340858fa89836e2f63790bbc392f8`；成员 `mtime=0`、
+`uid=gid=0`、`uname/gname` 为空、`mode` 0755（二进制）/ 0644（文本），gzip header 的 mtime 字段是
+`00000000`，归档内单顶层目录且含 `LICENSE`/`NOTICE`/`README.md`。
+即"同源构建 → 同 sha256"在 tar 路径上成立，不随打包时刻漂移（见 §1 的约定细节）。
+
 ### 7.4 运行时依赖证据（PE 导入表）
 
 `objdump -p target/release/unlucky-launcher.exe` 共 42 条 DLL 导入记录、33 个不同名字（大小写各记一次），全部是 Windows 自带：
@@ -186,7 +211,9 @@ uxtheme/uiautomationcore/opengl32/ws2_32/bcrypt/bcryptprimitives/ntdll` + 一组
 **没有** `VCRUNTIME140.dll` / `MSVCP140.dll` 这类 MSVC 可再发行包依赖，也没有 `libwinpthread-1.dll` /
 `libgcc_s_*.dll` 之类 MinGW 运行时 —— 即"拷走一个 exe 就能跑"（Win10+ 自带 UCRT）。
 CI 的 MSVC `+crt-static` 产物同理（静态 CRT）；`release.yml` 里用 `dumpbin -dependents` 把这条变成硬门禁，
-一旦静态 CRT 没生效（出现 VCRUNTIME/MSVCP/ucrtbase）就直接 fail，不允许"悄悄要用户装可再发行包"。
+两侧都 fail、没有降级分支：**出现 VCRUNTIME/MSVCP/ucrtbase 就 fail**，**找不到 dumpbin 同样 fail**
+（`windows-latest` 自带 VS 工具链，基本找得到；"找不到就跳过"等于让门禁在最需要它的时候失效）。
+总之不允许"悄悄要用户装可再发行包"。
 注意：本机只装了 GNU 工具链，MSVC 那个槽位的产物本身**没有在本机验证过**，由 CI 首跑验证。
 
 ## 8. 发行合规
@@ -200,7 +227,7 @@ CI 的 MSVC `+crt-static` 产物同理（静态 CRT）；`release.yml` 里用 `d
   Unicode-3.0 / CDLA-Permissive-2.0 / Slint-RF-2.0）。发布任务不新增任何依赖。
 - 发布产物不含游戏本体、不含 JRE、不含任何账号数据；`ull`/GUI 的数据目录在用户侧生成。
 
-## 9. 支持矩阵（对外口径，与 release-notes 模板一致）
+## 9. 支持矩阵（对外口径，与 release-notes 模板逐行一致）
 
 | 平台 | 级别 | 运行时要求 |
 |------|------|-----------|
@@ -209,7 +236,10 @@ CI 的 MSVC `+crt-static` 产物同理（静态 CRT）；`release.yml` 里用 `d
 | Linux x64 X11 | 一等 | glibc 2.35+、xkbcommon、fontconfig、libGL、xcb |
 | Linux x64 Wayland | 支持 | 上述 + wayland-client |
 | Windows 8.1/8/7 | 不支持 | 基线已上调（D21） |
-| Android Termux + X11 | 试验级（不承诺） | 仅 CLI |
+| Android Termux + X11 | 试验级（不承诺） | 仅 CLI（源码自建），GUI 未验证，不在本发布矩阵内 |
+
+`packaging/release-notes.md` 的 "Support matrix" 表与上表逐行对应（英文版，Termux 行同样标注
+experimental / not part of this release matrix）——改一边必须同步另一边，否则标题里的"一致"就是假话。
 
 ## 10. 已知边界 / 后续
 
