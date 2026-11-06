@@ -1,0 +1,92 @@
+[package]
+name = "unlucky-app-iced"
+description = "Unlucky-Launcher 桌面壳（iced 0.14 重写版）：M3 Expressive 骨架 / 令牌适配 / 截图通道"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 并存期（D26）：Slint 版仍是 `crates/app` 的 `unlucky-launcher`，本 crate 出
+# `unlucky-launcher-iced`。两个 package 在同一 target 目录产出同名 bin 会冲突，
+# 所以**翻牌前不许改回 `unlucky-launcher`**（步骤见 SubAgentsTalk/app-iced-骨架与翻牌.md）。
+[[bin]]
+name = "unlucky-launcher-iced"
+path = "src/main.rs"
+
+[lib]
+name = "unlucky_app_iced"
+path = "src/lib.rs"
+
+[dependencies]
+# 令牌唯一真源（M61）：颜色/排版/形状/间距/图标几何全部只从这里取。
+unlucky-design = { path = "../design", version = "0.2.1" }
+
+# M85：UI 框架无关的宿主层（DTO / 状态 reducer / host）。**只登记依赖，本 mission 不接线**——
+# 页面用它的时机由后续 iced 页面 mission 决定（接线流程见 crates/presenter/src/lib.rs 的 crate 文档）。
+# 与 Slint 版共用同一套 host 与状态语义，这是 D26「重写只换渲染」的落点。
+unlucky-presenter = { path = "../presenter", version = "0.2.1" }
+
+# UI 框架（D26 锁定 iced 0.14）。**不得依赖 slint**。
+# 关掉默认 features 后必须显式给执行器（M60 踩坑 Q2：否则 `No futures executor has been enabled`），
+# 这里给 `thread-pool`（iced 自己的默认执行器，不额外引 tokio 运行时）。
+# `wgpu` 由本 crate 的 `gpu` feature 打开，于是「仅 CPU」体积基线用 `--no-default-features` 就能量到。
+iced = { version = "=0.14.0", default-features = false, features = [
+    "tiny-skia",
+    "crisp",
+    "advanced",
+    # M93：背景图要真图直出 ⇒ 需要渲染器的 image 支持。用 `image-without-codecs` 而不是
+    # `image` 是刻意的：后者会打开 `image/default` 的全套编解码器；前者的编解码能力由本 crate
+    # 依赖表里那条 `image` 的 features 决定（png / jpeg / bmp），不必把 webp/tiff/exr/gif 拖进来。
+    "image-without-codecs",
+    "svg",
+    "thread-pool",
+] }
+
+# 截图落 PNG + 背景图解码（M93）：png 是截图通道，jpeg/bmp 是用户真会挑的背景图/壁纸格式
+# （M73 的壁纸探测不筛扩展名）。仍不开 default-features——那会拖进 avif/ravif/webp/tiff 一整套。
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "bmp",
+] }
+
+# M82：同一个二进制也带 CLI 子命令（`unlucky-launcher-iced instances list` …），
+# 进 UI 之前分发，命中就把控制权交给 `unlucky_cli::run`。依赖方向 app-iced → cli →
+# core/agent 不违反 core 零 UI 铁律（core 的依赖树里没有 cli）。零 UI 依赖的 `ull`
+# 仍在 `crates/cli`，给没有图形库的机器用——两者不是重复品。
+unlucky-cli = { path = "../cli", version = "0.2.1" }
+
+# M92（D28）：国际化地基（语言探测 / 消息目录 / 中文字体策略）。零依赖 crate——它拿不到 iced，
+# 所以系统字体扫描留在这里（`src/fonts/cjk.rs`），本 crate 只把族名喂给它的纯函数。
+unlucky-i18n = { path = "../i18n", version = "0.2.1" }
+
+# M97：判据表第 8 行的取证通道。`iced_wgpu` 在真创建设备时会 `log::info!("Selected: {adapter:#?}")`，
+# 但进程里从来没人装 logger，于是「看不见」被当成了「没发生」。这里装一个只放行 `iced_wgpu*` /
+# `wgpu*` 的 logger（见 `src/renderer/log_bridge.rs`），把这行捞出来。
+# 已是 iced 传递依赖树里的版本（0.4.34），不新增任何传递依赖；MIT OR Apache-2.0，许可白名单内。
+log = { version = "0.4", features = ["std"] }
+
+# X11 / Wayland 后端与 Linux 主题检测只在 Linux 上启用：macOS 没有 X11/Wayland（走 Metal +
+# 系统外观），Windows 走 DX12，这三个 feature 在那边没有意义。同一个包在两处写 features 是
+# **取并集**（Cargo 的 feature 解析是加法），所以 Linux 上拿到的仍是上面 5 个 + 这 3 个，
+# Windows / macOS 只拿上面那 5 个（`cargo tree --target` 可复核）。
+# 诚实边界：这**不**解决「iced 版至今没在 macOS 上编过」这件事——`iced_winit` 已把 `mundy`
+# 放在 `cfg(target_os = "linux")` 段里，这三个 feature 在非 Linux 上本来就不拉依赖，这里只是
+# 让本仓库的依赖图按平台自述清楚，不再把 Linux 专属能力写成全平台事实。
+[target.'cfg(target_os = "linux")'.dependencies]
+iced = { version = "=0.14.0", default-features = false, features = [
+    "x11",
+    "wayland",
+    "linux-theme-detection",
+] }
+
+[features]
+default = ["gpu"]
+# 硬件渲染后端（wgpu→Vulkan/DX12）。关闭后只剩 tiny-skia（CPU），用于体积基线与无 GPU 机器。
+gpu = ["iced/wgpu"]
+
+[lints]
+workspace = true

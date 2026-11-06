@@ -1,0 +1,1 @@
+[12:00:52] [main/ERROR]: org.spongepowered.asm.launch.platform.MixinPlatformManager threw ResolutionException: Module optifine reads another module named optifine

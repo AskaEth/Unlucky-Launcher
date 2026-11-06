@@ -1,0 +1,136 @@
+# 规则库 · Forge mod 解析（8 条）
+# 移植自 HMCL CrashReportAnalyzer.Rule 的 Forge 组（analyse/02 §7.3 第 6 组）。
+version: 1
+category: forge
+rules:
+  - id: forge.missing_dependencies
+    severity: critical
+    scope: file
+    pattern: 'Missing or unsupported mandatory dependencies:(?<reason>(.*)[\n\r]*(\t(.*)[\n\r]*)+)'
+    confidence: 0.85
+    priority: 80
+    cause:
+      key: diagnose.cause.forge.missing_dependencies
+      summary: 'Forge 报「缺少或不支持强制依赖」：有 mod 的前置没装或版本不对'
+      detail: '按报错里的 mod 名补齐前置；装不上就删掉依赖它的 mod'
+    fix_action:
+      - kind: remove_mod
+        action: disable
+        note: '按报错逐条补齐/禁用'
+    sample: samples/forge/missing_dependencies.log
+    source: 'HMCL CrashReportAnalyzer.Rule.FORGEMOD_RESOLUTION'
+
+  - id: forge.duplicate_mods
+    severity: critical
+    scope: file
+    pattern: 'Found duplicate mods:(?<reason>(.*)(?:\r\n|\n|\r)*(\t(.*)(?:\r\n|\n|\r)*)+)'
+    confidence: 0.9
+    priority: 86
+    cause:
+      key: diagnose.cause.forge.duplicate_mods
+      summary: '同一个 mod 装了两份（mods 目录里重复的 jar）'
+      detail: '删掉重复的那一份，只留一个版本'
+    fix_action:
+      - kind: remove_mod
+        action: remove
+        note: '保留一个版本'
+    sample: samples/forge/duplicate_mods.log
+    source: 'HMCL CrashReportAnalyzer.Rule.FORGE_FOUND_DUPLICATE_MODS'
+
+  - id: forge.duplicated_mod
+    severity: critical
+    pattern: 'Found a duplicate mod (?<name>.*) at (?<path>.*)'
+    confidence: 0.92
+    priority: 88
+    cause:
+      key: diagnose.cause.forge.duplicated_mod
+      summary: 'mod 重复：{name} 同时出现在 {path}'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - '{name}'
+        action: remove
+        note: '删除路径 {path} 那一份'
+    sample: samples/forge/duplicated_mod.log
+    source: 'HMCL CrashReportAnalyzer.Rule.DUPLICATED_MOD'
+
+  - id: forge.repeat_installation
+    severity: critical
+    pattern: 'MultipleArgumentsForOptionException: Found multiple arguments for option (.*?), but you asked for only one'
+    confidence: 0.85
+    priority: 80
+    cause:
+      key: diagnose.cause.forge.repeat_installation
+      summary: 'Forge 被装了两次（同一版本出现多个安装参数）'
+      detail: '删掉重复的 Forge 安装/版本 JSON，再重装一次'
+    fix_action:
+      - kind: reinstall
+        component: forge
+    sample: samples/forge/repeat_installation.log
+    source: 'HMCL CrashReportAnalyzer.Rule.FORGE_REPEAT_INSTALLATION'
+
+  - id: forge.optifine_repeat_installation
+    severity: critical
+    pattern: 'ResolutionException: Module optifine reads another module named optifine'
+    confidence: 0.88
+    priority: 82
+    cause:
+      key: diagnose.cause.forge.optifine_repeat_installation
+      summary: 'OptiFine 装了两份（mods 里一个 + 自动安装一个）'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - optifine
+        action: remove
+        note: '只保留一种安装方式'
+    sample: samples/forge/optifine_repeat_installation.log
+    source: 'HMCL CrashReportAnalyzer.Rule.OPTIFINE_REPEAT_INSTALLATION'
+
+  - id: forge.too_many_mods
+    severity: critical
+    pattern: 'maximum id range exceeded'
+    confidence: 0.9
+    priority: 80
+    cause:
+      key: diagnose.cause.forge.too_many_mods
+      summary: '装的 mod 太多，方块/物品 ID 超出上限（1.12 及更早的经典问题）'
+      detail: '删掉一部分 mod，或换用 1.13+ 的版本（不再有 ID 上限）'
+    fix_action:
+      - kind: remove_mod
+        action: disable
+        note: '减量或换版本'
+    sample: samples/forge/too_many_mods.log
+    source: 'HMCL CrashReportAnalyzer.Rule.TOO_MANY_MODS_LEAD_TO_EXCEEDING_THE_ID_LIMIT'
+
+  - id: forge.module_name_invalid
+    severity: warning
+    pattern: >-
+      Invalid module name: '' is not a Java identifier
+    confidence: 0.8
+    priority: 70
+    cause:
+      key: diagnose.cause.forge.module_name_invalid
+      summary: '某个 mod 的 jar 文件名不含英文字母/数字，Forge 把它当成非法 JPMS 模块名（如「拔刀剑.jar」）'
+      detail: '把该 jar 改成英文文件名（保留 .jar 后缀）再启动'
+    fix_action:
+      - kind: remove_mod
+        action: replace
+        note: '把 jar 改成英文文件名'
+    sample: samples/forge/module_name_invalid.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MOD_NAME'
+
+  - id: forge.bootstrap_failed
+    severity: critical
+    pattern: 'Failed to create mod instance\. ModID: (?<id>.*?),'
+    confidence: 0.85
+    priority: 80
+    cause:
+      key: diagnose.cause.forge.bootstrap_failed
+      summary: 'mod {id} 的实例创建失败（初始化就抛异常）'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - '{id}'
+        action: disable
+    sample: samples/forge/bootstrap_failed.log
+    source: 'HMCL CrashReportAnalyzer.Rule.BOOTSTRAP_FAILED'

@@ -1,0 +1,57 @@
+// 横幅通知条：隔离档位切换提示（M30 ModeChangeWarning）/ 启动失败 / 启动告警。
+// 与 Toast 的分工：Toast 是「刚发生了什么」，通知条是「现在需要你处理」（用户点了才收）。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiNotice, NoticeKind } from "../models.slint";
+import { PageState } from "../page_state.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+import { MetroButton, ButtonKind } from "../widgets/button.slint";
+
+// 横幅通知：隔离档位切换提示（M30 ModeChangeWarning）/ 启动失败 / 启动告警。
+// 与 Toast 的分工：Toast 是「刚发生了什么」，通知条是「现在需要你处理」。
+export component NoticeBar inherits Rectangle {
+    in property <[UiNotice]> notices;
+
+    visible: root.notices.length > 0;
+    height: root.notices.length > 0 ? 48px : 0px;
+    background: Theme.state-warn-soft;
+
+    HorizontalLayout {
+        padding-left: Metrics.gap-4;
+        padding-right: Metrics.gap-3;
+        spacing: Metrics.gap-2;
+
+        for notice in root.notices : Rectangle {
+            horizontal-stretch: 1;
+            background: transparent;
+            HorizontalLayout {
+                spacing: Metrics.gap-2;
+                AppIcon {
+                    icon-size: 16px;
+                    kind: notice.kind == NoticeKind.error ? IconKind.error : IconKind.warn;
+                    tint: notice.kind == NoticeKind.error ? Theme.state-danger : Theme.state-warn;
+                }
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    spacing: 0px;
+                    UiText { role: TextRole.caption; text: notice.title; horizontal-stretch: 1; }
+                    UiText {
+                        role: TextRole.caption;
+                        text: notice.body;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        color: Theme.fg-secondary;
+                    }
+                }
+                MetroButton {
+                    kind: ButtonKind.subtle;
+                    text: "知道了";
+                    button-height: 22px;
+                    clicked => { PageState.notice-dismiss(notice.id); }
+                }
+            }
+        }
+    }
+}
+
