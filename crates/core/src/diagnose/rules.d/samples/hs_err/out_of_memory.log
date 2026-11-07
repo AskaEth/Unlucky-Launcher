@@ -1,0 +1,19 @@
+#
+# There is insufficient memory for the Java Runtime Environment to continue.
+# Native memory allocation (mmap) failed to map 1073741824 bytes for committing reserved memory.
+#
+#  Out of Memory Error (os_windows.cpp:3521), pid=9876, tid=0x0000000000001f44
+#
+# JRE version: Java(TM) SE Runtime Environment (17.0.9+9) (build 17.0.9+9-LTS-211)
+# Java VM: Java HotSpot(TM) 64-Bit Server VM (17.0.9+9-LTS-211, mixed mode, sharing, tiered, compressed oops, compressed class ptrs, g1 gc, windows-amd64)
+#
+
+---------------  T H R E A D  ---------------
+
+Current thread (0x0000021d6f82b1a0):  JavaThread "Render thread" [_thread_in_vm, id=14120, stack(0x000000a1b0000000,0x000000a1b0100000)]
+
+VM Arguments:
+jvm_args: -Xmx8192m -Xms2048m
+java_command: net.fabricmc.loader.impl.launch.knot.KnotClient --gameDir .
+
+Memory: 4k page, physical 8134564k(120944k free), swap 9723904k(550664k free)

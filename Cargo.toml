@@ -1,0 +1,164 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/agent",
+    # M85（D26）：UI 框架无关的宿主层。Slint 版（crates/app）与 iced 版（crates/app-iced）
+    # 共用它；Slint 退役（M118 起 `crates/app` 已不是 workspace 成员）后只剩 iced 依赖，本 crate 不受影响。
+    "crates/presenter",
+    "crates/cli",
+    "crates/design",
+    # P4（D26 iced 重写）第一步：与 Slint 版 `crates/app` 并存的新 UI crate。
+    # bin 名 `unlucky-launcher-iced`，翻牌时才改名（见 DevDocs/SubAgentsTalk/app-iced-骨架与翻牌.md）。
+    # M118 起它是发布矩阵里**唯一**的 GUI 来源：发布了 Slint 版的那个 bin 名属于被排除的 `crates/app`。
+    "crates/app-iced",
+    # M87（D40 第 2 层）：配色取色的解码适配层。**唯一**允许引入 `image` 类依赖的地方，
+    # 使 `crates/design` 能继续宣称「零第三方依赖」。
+    "crates/palette-extract",
+    # M92（D28）：国际化地基——语言探测 / 中英消息目录 / 中文字体策略。零第三方依赖、零 UI 依赖，
+    # 壳层（iced 版现在，别的壳将来）与 presenter 都依赖它，所以它不能认任何一个渲染框架。
+    "crates/i18n",
+]
+# M118（D26）：`crates/app` 是 Slint 退役树 —— UI 已迁到 iced，目录与源码**原样保留**作历史
+# 参考（另一份参考资产见 DevDocs/ops/slint-reference/），但不再进默认构建与发布矩阵。摘出去的
+# 是整棵 slint 1.18 + usvg 0.48 依赖树：本机单路冷编 ≈14 分钟，而 CI 的 `--workspace` 每次都会
+# 编它，既拖长反馈，又会在并行超配时随机 OOM（见 DevDocs/00-踩坑记录-p2.md T7）。
+# 排除 ≠ 删除，但**它确实不再可编**：该 manifest 整份都是 `*.workspace = true` 继承写法，
+# 一旦不是 workspace 成员，继承无源、manifest 解析即失败（实测：
+# `cargo metadata --manifest-path crates/app/Cargo.toml` → "error inheriting `edition` …"）。
+# 要读这一版实现请直接读源码，别再尝试构建它。
+exclude = ["crates/app"]
+
+[workspace.package]
+version = "0.2.2"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["AskaEth <i@yeij.top>"]
+repository = "https://github.com/AskaEth/Unlucky-Launcher"
+rust-version = "1.92"
+publish = false
+
+[workspace.dependencies]
+# 共享依赖（版本在此集中，各 crate 用 `xxx.workspace = true` 引用）
+# M15（core::diagnose）首批使用者：规则正则 / 规则 YAML 解析 / 诊断结果序列化。
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# serde_yaml 上游已停维护（RUSTSEC-2024-0320），改用维护中的 API 兼容分支（tower 定案）
+serde_yaml_ng = "0.10"
+
+# M13（core::download）：HTTP + 异步运行时 + 流 + 校验哈希。
+# rustls（ring）而非 native-tls —— 免 OpenSSL/系统证书栈依赖，MinGW 与 Win7 都省事。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "fs",
+    "io-util",
+    "time",
+    "sync",
+    "net",
+    "macros",
+] }
+futures-util = "0.3"
+sha1 = "0.10"
+sha2 = "0.10"
+# M31（core::auth）：离线账户 UUID 必须与 Minecraft 服务端/HMCL 的
+# `UUID.nameUUIDFromBytes` 逐字节一致 = MD5 + v3 位改写，因此需要 MD5。
+# 与 sha1/sha2 同属 RustCrypto（Apache-2.0 OR MIT），版本对齐 digest 0.10。
+md-5 = "0.10"
+
+# M29（core::launch::natives）：读 natives jar（zip 容器）解压原生库。
+# 只开 inflate（`deflate-flate2-zlib-rs`，纯 Rust zlib）——解压方向不需要 zopfli 压缩器。
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+# M33（core::game::java）：Temurin 的 Linux/macOS 产物只发 `.tar.gz`（Windows 是 `.zip`，
+# 复用上面的 zip）。flate2/tar 都是纯 Rust + MIT OR Apache-2.0，白名单内。
+flate2 = "1"
+tar = "0.4"
+
+# M87（D40）：配色取色的解码适配层。版本与 `crates/app-iced` 的截图通道对齐（同一份
+# `image` 只编译一次）；编解码器由各 crate 自己按需开 feature，这里只钉版本。
+image = { version = "0.25", default-features = false }
+
+# UI 层唯一入口（D2：Slint，RF 2.0 轨道）。
+# 默认特性已含 backend-default + renderer-femtovg（GL）+ renderer-software（CPU 软渲染兜底，
+# Win7 老机无可用 GPU 时的降级路径，见 DevDocs/PlanDoc/01c-native-gui-options.md §6）。
+slint = "1.18"
+# app 的 build script 用（把 ui/main.slint 编译成 Rust 代码），版本必须与 slint 主 crate 同步。
+slint-build = "1.18"
+
+# agent 层依赖（rig / rmcp）按 D4 在 M16 引入，脚手架期不引入以免版本冲突。
+# 版本锁定策略见 DevDocs/PlanDoc/02-ai-agent-design.md §0：rig 锁 =0.45.x，rmcp 3.8.x。
+#
+# M39 的 MCP server（02 §0「传输定论」）：rmcp 官方 SDK（Apache-2.0），**锁精确版本**——
+# pre-1.0 且 ~6 天一个版、3.x 内已多次改 server API。只开需要的传输 feature：
+# - `server`（default 带）+ `transport-io`（stdio，给 llama.cpp 内置 MCP client）
+# - `transport-streamable-http-server`（主力：127.0.0.1 上的 Streamable HTTP）
+# `macros` 一并留在 default 里（`#[tool]` 宏不用，但 default 拆开易漏 base64 等隐式依赖）。
+rmcp = { version = "=3.8.0", features = [
+    "transport-io",
+    "transport-streamable-http-server",
+] }
+# rmcp 的 Streamable HTTP server 是个 tower Service，官方示例用 axum 挂监听（MIT）。
+# 只吃 `nest_service` + `serve`，不引入任何 TLS/模板/DB 生态。
+axum = "0.8"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# P6（M96）：日常迭代 / 本机验收用的「快」档，发布仍走上面的 release。
+# `inherits = "release"` 让其余各项（strip / debug / overflow-checks …）照抄 release，
+# 只覆盖拖慢构建的四处：
+# - lto = "thin"：跨 crate 内联仍有，但可以并行；fat LTO 在 codegen-units = 1 下等于
+#   全程序串行链接（375 个 crate 排队），一次性吃掉十几分钟。
+# - codegen-units = 16：给 codegen 留并行度，不再把整个 crate 挤成一个 CGU。
+# - opt-level = 2：介于 "z" 与 3 之间，"z" 会为了体积关掉一批循环/内联优化，代价是运行期。
+# - panic = "unwind"：release 是 panic = "abort"，inherits 会照抄。留着它是为了让 fast 档编出来的
+#   **二进制**走 unwind（panic 会栈展开，不是直接 abort）。
+#   ⚠️ 理由不是「不写就跑不了测试」：`cargo test` **不**依赖这一行 —— cargo 对 test 目标自己强制
+#   unwind。实测 `cargo test --profile release -p unlucky-i18n`（release = abort 档）照跑，23 个
+#   测试全过，且 test 单元的 rustc 参数里**没有** `-Cpanic=`。别拿「cargo test 能跑」当这行生效的证据；
+#   要看就用 `cargo build --profile {fast,release} -v` 比 rustc 参数：release 有 `panic=abort`，fast 没有。
+#
+# ⚠️ 定位（实测，别误读）：本机（12 核 + 机械盘源码盘 + -j 4）冷编译 fast = 24m27s，
+# **比 release 的 16m01s 还慢**，体积是 2.3 倍（36.41 vs 15.72 MiB GUI）。瓶颈在两个大
+# UI crate 的编译 + 链接 + 磁盘 IO，LTO/CGU 这几个旋钮被掩盖了。它的价值在 **SSD 机器**和
+# **增量重编**（thin 不必每次全程序 LTO）；「加了 fast 档」≠「冷编译会变快」。
+[profile.fast]
+inherits = "release"
+opt-level = 2
+lto = "thin"
+codegen-units = 16
+panic = "unwind"
+
+# P6（M96）：依赖不需要为体积做极致优化，但**实测结论与直觉相反**——把依赖的 opt-level 从
+# release 的 "z" 抬到 3（本档最初就是这么定的）会让冷编译**更慢**、体积还更大：
+# 同机冷编译 opt-3 = 22m45s / 19.46 MiB（GUI），opt-"z" = 16m01s / 15.72 MiB（两臂同为 cu16）。
+# 所以这里**opt-level 保持 "z"，只把并行度放到 16**；workspace 自己的 crate 仍吃 "z" / 单 CGU。
+# ⚠️ **未测**：cu1 → cu16 的收益本轮没有同条件对照（两臂都是 cu16，唯一自变量是 opt-level），
+# 所以「cu16 才是收益来源」不是实测结论，要归因得单独跑一轮 cu1 对照。另：GUI 体积相对旧基线
+# 涨了 12.9%（13.92 → 15.72 MiB），其中「代码增长」与「依赖 cu16」也没分离。
+# **只调优化强度**：panic 与 strip 绝不写进这里。那两项改变的是整个二进制的运行时行为
+# （panic 策略决定能否 unwind 出栈、strip 决定符号表留不留），不是「给依赖放宽」的范畴。
+[profile.release.package."*"]
+opt-level = "z"
+codegen-units = 16
+
+# `inherits = "release"` 会把 `[profile.release.package."*"]` **一起继承过来**（实测：删掉下面这块，
+# fast 档的外部依赖就从 opt-level 2 退回 `"z"`；workspace 成员不受 `*` 覆盖、仍是 fast 自己的 2）。
+# 所以这块**必须存在**，它是承重墙不是冗余兜底 —— 删掉会让 fast 档的依赖静默退回 `"z"`。
+[profile.fast.package."*"]
+opt-level = 2
+codegen-units = 16

@@ -1,0 +1,28 @@
+[package]
+name = "unlucky-presenter"
+description = "Unlucky-Launcher 的 UI 框架无关宿主层：DTO / 状态 reducer / host 业务装配，Slint 版与 iced 版共用"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 零 UI 框架依赖是硬约束（M85 / D26）：本 crate 是 Slint 版（`crates/app`）与 iced 版
+# （`crates/app-iced`）共用的宿主层，任何时候都不得出现 Slint / iced / winit / gtk / egui 等
+# UI 或渲染框架，也不得出现「把窗口属性灌进去」这种绑定代码。
+# 证据命令写在 `crates/app/Cargo.toml` 的注释里（那个文件允许出现框架名，本 crate 的守门
+# 命令本身在自家 grep 范围内会把自己抓出来，所以那两条命令刻意不放在这里）。
+[dependencies]
+# 跨边界 DTO 必须可序列化（AGENTS §6）：事件与快照是 IPC 契约，序列化能力由 derive 钉住。
+serde.workspace = true
+# host 层要读 core 设置/事件里的 JSON 值。
+serde_json.workspace = true
+
+# 边界（01c §5 / D3）：presenter 只经 DTO 消费 core，**不 import core 的领域类型到 DTO 里**。
+# host 是 core 的快照/事件流与本 crate DTO 之间的唯一翻译层，所以它需要 core。
+unlucky-core = { path = "../core", version = "0.2.2" }
+
+[lints]
+workspace = true

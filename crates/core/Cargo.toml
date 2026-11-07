@@ -1,0 +1,74 @@
+[package]
+name = "unlucky-core"
+description = "Unlucky-Launcher 领域库：纯逻辑，零 UI 依赖（D3 架构纪律）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 零 UI 依赖是硬约束：这里只允许纯逻辑/协议/IO 类依赖（serde/tokio/reqwest 等后续按模块加），
+# 任何时候都不得出现 slint / egui / iced / winit / gtk / javafx —— CI 的 core-no-ui job 守门。
+[dependencies]
+# M15（core::diagnose）预接线：59 条规则正则、规则 YAML 解析、诊断输出序列化。
+# 真正使用方是 crates/core/src/diagnose/ 下的 collectors/engine/hs_err/loader/rules（M15 落地）。
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+
+# M13（core::download）预接线：HTTP / 异步运行时 / 流 / 哈希校验。
+reqwest.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+zip.workspace = true
+# M31（core::auth）：离线 UUID = MD5 v3（与 HMCL / 服务端 nameUUIDFromBytes 对拍）。
+md-5.workspace = true
+# M33（core::game::java）预接线：tar.gz 解压（Temurin 的 Linux/macOS 产物）。
+flate2.workspace = true
+tar.workspace = true
+
+# M13 的 8 个下载测试 target（文件由 M13 阶段 B 用真实用例覆盖；脚手架期是占位）。
+# `tests/download/support/mod.rs` 是被各 test include 的公共夹具，不单独注册。
+[[test]]
+name = "backoff"
+path = "tests/download/backoff_test.rs"
+
+[[test]]
+name = "health"
+path = "tests/download/health_test.rs"
+
+[[test]]
+name = "mirrors"
+path = "tests/download/mirrors_test.rs"
+
+[[test]]
+name = "region"
+path = "tests/download/region_test.rs"
+
+[[test]]
+name = "cache"
+path = "tests/download/cache_test.rs"
+
+[[test]]
+name = "chunked"
+path = "tests/download/chunked_test.rs"
+
+[[test]]
+name = "resume"
+path = "tests/download/resume_test.rs"
+
+[[test]]
+name = "engine_mock"
+path = "tests/download/engine_mock_test.rs"
+
+[[test]]
+name = "partfile"
+path = "tests/download/partfile_test.rs"
+
+[lints]
+workspace = true

@@ -1,0 +1,300 @@
+// 基础输入件：单行输入（含占位文本）、搜索框、开关、分段控件、复选框。
+// 一律自绘（Metro 需要方角 + accent 高亮）。占位文本手绘：内置 TextInput 没有
+// placeholder-text（那是 std-widgets 的 LineEdit，外观不可控）。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+import { UiText, TextRole } from "../components/label.slint";
+
+/// 单行输入：内置 TextInput + 占位文本层（Focus 态由外部读 `focused`）。
+export component PlainInput inherits Rectangle {
+    in-out property <string> text: "";
+    in property <string> placeholder: "";
+    in property <color> text-color: Theme.fg-primary;
+    in property <length> text-padding: 0px;
+    out property <bool> focused: input.has-focus;
+    callback edited(string);
+    callback accepted(string);
+
+    background: transparent;
+
+    input := TextInput {
+        x: root.text-padding;
+        y: 0;
+        width: root.width - 2 * root.text-padding;
+        height: root.height;
+        color: root.text-color;
+        font-family: Theme.font-family;
+        font-size: Theme.font-size-body;
+        vertical-alignment: center;
+        single-line: true;
+        text <=> root.text;
+        edited => { root.edited(self.text); }
+        accepted => { root.accepted(self.text); }
+    }
+
+    if root.text == "" && root.placeholder != "" : UiText {
+        x: root.text-padding;
+        y: 0;
+        width: root.width - 2 * root.text-padding;
+        height: root.height;
+        role: TextRole.body;
+        text: root.placeholder;
+        color: Theme.fg-disabled;
+    }
+}
+
+export component SearchField inherits Rectangle {
+    in-out property <string> text: "";
+    in property <string> placeholder: "搜索";
+    callback edited(string);
+    callback accepted(string);
+
+    height: Metrics.control-height;
+    background: Theme.bg-input;
+    border-radius: Metrics.radius-sm;
+    border-width: 1px;
+    border-color: field.focused ? Theme.accent : Theme.stroke;
+
+    HorizontalLayout {
+        padding-left: Metrics.gap-2;
+        padding-right: Metrics.gap-2;
+        spacing: Metrics.gap-2;
+
+        AppIcon { kind: IconKind.search; icon-size: 14px; }
+
+        field := PlainInput {
+            placeholder: root.placeholder;
+            text <=> root.text;
+            edited(t) => { root.edited(t); }
+            accepted(t) => { root.accepted(t); }
+        }
+    }
+}
+
+export component TextField inherits Rectangle {
+    in-out property <string> text: "";
+    in property <string> placeholder: "";
+    callback edited(string);
+
+    height: Metrics.control-height;
+    background: Theme.bg-input;
+    border-radius: Metrics.radius-sm;
+    border-width: 1px;
+    border-color: field.focused ? Theme.accent : Theme.stroke;
+
+    field := PlainInput {
+        text-padding: Metrics.gap-2;
+        placeholder: root.placeholder;
+        text <=> root.text;
+        edited(t) => { root.edited(t); }
+    }
+}
+
+export component ToggleSwitch inherits Rectangle {
+    in-out property <bool> checked: false;
+    callback toggled(bool);
+
+    width: 40px;
+    height: 20px;
+    border-radius: 10px;
+    background: checked ? Theme.accent : Theme.stroke-strong;
+    animate background { duration: Theme.motion-normal; }
+
+    Rectangle {
+        width: 14px;
+        height: 14px;
+        y: 3px;
+        x: root.checked ? root.width - self.width - 3px : 3px;
+        border-radius: 7px;
+        background: Theme.fg-on-accent;
+        animate x { duration: Theme.motion-normal; easing: ease-in-out; }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+/// 分段控件（视图切换、磁贴尺寸、主题三态共用）
+export component SegmentedControl inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected: 0;
+    callback changed(int);
+
+    height: Metrics.control-height;
+    background: Theme.bg-canvas;
+    border-radius: Metrics.radius-sm;
+    border-width: 1px;
+    border-color: Theme.stroke;
+
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for o[i] in options : Rectangle {
+            border-radius: Metrics.radius-sm;
+            background: i == root.selected
+                ? Theme.accent
+                : (seg.has-hover ? Theme.bg-hover : transparent);
+            animate background { duration: Theme.motion-fast; }
+
+            UiText {
+                role: TextRole.caption;
+                text: o;
+                horizontal-alignment: center;
+                color: i == root.selected ? Theme.fg-on-accent : Theme.fg-primary;
+            }
+
+            seg := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.selected = i;
+                    root.changed(i);
+                }
+            }
+        }
+    }
+}
+
+export component CheckBox inherits Rectangle {    in-out property <bool> checked: false;
+    in property <string> text: "";
+    callback toggled(bool);
+
+    height: Metrics.touch-target;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: Metrics.gap-2;
+
+        Rectangle {
+            width: 16px;
+            height: 16px;
+            border-radius: Metrics.radius-sm;
+            border-width: 1px;
+            border-color: root.checked ? Theme.accent : Theme.stroke-strong;
+            background: root.checked ? Theme.accent : Theme.bg-input;
+
+            if root.checked : AppIcon {
+                kind: IconKind.check;
+                icon-size: 12px;
+                x: 2px;
+                y: 2px;
+                tint: Theme.fg-on-accent;
+            }
+        }
+
+        UiText { role: TextRole.body; text: root.text; }
+
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+            }
+        }
+    }
+}
+
+/// 滑条（09 §102/§101 的「强度滑条」：暗化层强度、面板半透明度共用）。
+/// 自绘而非 std-widgets 的 Slider：Metro 需要方头轨道 + accent 填充，且要跟主题令牌一起换肤。
+export component MetroSlider inherits Rectangle {
+    in property <float> minimum: 0.0;
+    in property <float> maximum: 1.0;
+    in-out property <float> value: 1.0;
+    callback changed(float);
+
+    out property <float> ratio: root.maximum > root.minimum
+        ? Math.max(0.0, Math.min(1.0, (root.value - root.minimum) / (root.maximum - root.minimum)))
+        : 0.0;
+
+    width: 200px;
+    height: Metrics.touch-target;
+    background: transparent;
+
+    /// 鼠标位置 → 取值（Slint 的 function 不能声明局部变量，所以拆成纯函数；
+    /// 函数名不用 kebab-case：`value-at(...)` 会被当成减法解析）
+    pure function valueForX(x: length) -> float {
+        return root.minimum
+            + Math.max(0.0, Math.min(1.0, x / root.width)) * (root.maximum - root.minimum);
+    }
+
+    // 轨道 + 已填充段
+    Rectangle {
+        x: 0;
+        y: (root.height - 4px) / 2;
+        width: root.width;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.stroke-strong;
+    }
+    Rectangle {
+        x: 0;
+        y: (root.height - 4px) / 2;
+        width: root.width * root.ratio;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+    // 滑块
+    Rectangle {
+        x: (root.width - 14px) * root.ratio;
+        y: (root.height - 14px) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: Theme.accent;
+        border-width: 2px;
+        border-color: Theme.surface-solid;
+    }
+
+    area := TouchArea {
+        mouse-cursor: pointer;
+        moved => {
+            root.value = root.valueForX(self.mouse-x);
+            root.changed(root.value);
+        }
+        clicked => {
+            root.value = root.valueForX(self.mouse-x);
+            root.changed(root.value);
+        }
+    }
+
+    accessible-role: slider;
+}
+
+/// 预设色板（09 §104 自定义强调色：预设色板 + 取色器，取色器由十六进制输入承担）。
+export component ColorSwatches inherits Rectangle {
+    in property <[color]> palette;
+    in property <color> current;
+    /// 传**索引**而不是 color：Slint 没有「颜色 → #RRGGBB」的格式化，
+    /// 预设色板的十六进制串由 Rust 侧同一张表给出（一处真相）。
+    callback picked(int);
+
+    width: root.palette.length * 28px;
+    height: 28px;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: 4px;
+
+        for shade[i] in root.palette : Rectangle {
+            width: 24px;
+            height: 24px;
+            border-radius: Metrics.radius-sm;
+            background: shade;
+            border-width: shade == root.current ? 2px : 1px;
+            border-color: shade == root.current ? Theme.fg-primary : Theme.stroke;
+
+            swatch-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.picked(i); }
+            }
+
+            accessible-role: button;
+        }
+    }
+}

@@ -1,0 +1,2 @@
+[12:00:32] [main/ERROR]: A mod crashed on startup
+java.lang.NoClassDefFoundError: net/minecraftforge/fml/loading/FMLEnvironment

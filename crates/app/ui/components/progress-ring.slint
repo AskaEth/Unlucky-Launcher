@@ -1,0 +1,22 @@
+// 启动进度环：磁贴「启动中」状态用（下载/校验/启动三个阶段共用一个环）。
+// 用 std-widgets 的 ProgressIndicator：progress <= 0 时转为不确定态（转圈）。
+// P1 若要完全贴合 Metro 强调色，需自绘弧线（Slint 无 arc 命令，得用旋转遮罩法）。
+import { Theme } from "../theme/tokens.slint";
+import { ProgressIndicator } from "std-widgets.slint";
+
+export component ProgressRing inherits Rectangle {
+    /// 0.0~1.0；<= 0 表示未知进度
+    in property <float> progress: 0;
+    in property <length> ring-size: 28px;
+
+    width: ring-size;
+    height: ring-size;
+    background: transparent;
+
+    ProgressIndicator {
+        width: root.ring-size;
+        height: root.ring-size;
+        progress: root.progress;
+        indeterminate: root.progress <= 0;
+    }
+}

@@ -1,0 +1,22 @@
+# 规则库 · 其它（1 条）
+# 移植自 HMCL CrashReportAnalyzer.Rule 的杂项组（analyse/02 §7.3 第 10 组）。
+# 将来「用户反馈沉淀的新规则」如果归不了类，也先落这里（标记 source 与需要复核）。
+version: 1
+category: other
+rules:
+  - id: other.debug_crash
+    severity: info
+    pattern: 'Manually triggered debug crash'
+    confidence: 0.95
+    priority: 70
+    cause:
+      key: diagnose.cause.other.debug_crash
+      summary: '这次崩溃是手动触发的（游戏里按 F3+C），不是真的故障'
+      detail: '如果用户点了「导出诊断包」做测试，可以忽略这条'
+    fix_action:
+      - kind: seek_help
+        export_diagnostics: false
+        needs_more_info:
+          - '确认是否手动触发的调试崩溃'
+    sample: samples/other/debug_crash.log
+    source: 'HMCL CrashReportAnalyzer.Rule.DEBUG_CRASH'

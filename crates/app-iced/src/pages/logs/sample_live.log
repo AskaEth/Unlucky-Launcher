@@ -1,0 +1,19 @@
+# M95 演示数据：一场**正常跑完**的会话（与 sample_crash.log 成对）。
+#
+# 为什么单独一份（视觉复审 r2 的 p3）：`live` 状态的页头写着「Finished normally」，
+# 却配着崩溃日志的尾行（`启动失败：exit code 1`），演示数据自相矛盾。
+#
+# 每行格式：`<等级> D|I|W|E <原文>`；`#` 开头是注释。
+
+I [19:22:01] [main/INFO] 正在启动 1.20.4，实例「开发测试」，加载器 NeoForge 21.1.72
+I [19:22:02] [main/INFO] Java 21.0.5 (Microsoft build 21.0.5+11-LTS), 内存 4096 MiB, JVM 参数 -Xmx4G -XX:+UseG1GC -Dfile.encoding=UTF-8 -Djava.library.path=C:\Users\Player\AppData\Roaming\.unlucky\instances\dev-test\natives
+W [19:22:03] [Render thread/WARN] GLFW 报告 OpenGL 3.2，低于推荐值 4.5；部分光影可能不可用
+I [19:22:05] [Render thread/INFO] OpenGL 3.2.0 NVIDIA 552.44，渲染器 NVIDIA GeForce GTX 1060 6GB
+I [19:22:08] [modloading-worker-0/INFO] 已加载 148 个模组，其中 3 个标记为客户端专用：iris-1.7.4, sodium-0.5.11, indium-1.0.32
+I [19:22:14] [Worker-Main-2/INFO] 正在准备生成区域，种子 20261102，生物群系 47 种，结构与地物共 113 项已注册
+I [19:22:19] [main/INFO] 世界「生存世界」已加载，游玩时间 3 小时 12 分
+I [19:22:20] [main/INFO] 本地服务器已启动，端口 25565
+I [19:22:41] [Render thread/INFO] 区块渲染完成，平均帧率 61 fps（垂直同步开）
+W [19:31:07] [Render thread/WARN] 一个资源包（Soartex Fanver 1.20）缺少 pack.png，已跳过图标
+I [19:40:12] [main/INFO] 正在停止服务器，保存世界数据
+I [19:40:13] [main/INFO] Stopping!

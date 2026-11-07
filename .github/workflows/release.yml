@@ -1,0 +1,126 @@
+name: Release
+
+# 发布流水线：tag `v*` → **只构建两个 Windows 槽位**（各自原生 `windows-latest` / `windows-11-arm`）→ 单文件产物 +
+#   SHA256SUMS → artifact + GitHub Release。pre-release 默认开；同 tag 重跑幂等（覆盖资产与说明、不 create、不碰标记）。
+# **构建 ≠ 发布**：只有 `PUBLISH_SLOTS` 里的槽位才进 Release 与 SHA256SUMS ——**M142 起只有 `windows-x64`**（arm64 连试
+#   四轮未成，仍留矩阵里取证、红了不挡 x64 发布；它修好后把键加回那一行即可）。四档 Linux/macOS 从未验证，默认连构建都
+#   不跑（M139：省配额、不留红叉）；整表六槽位取证走 `gh workflow run release.yml -f all_slots=true`（槽位表在 `plan`）。
+# 契约唯一真相源 packaging/README.md，打包本体 packaging/make_artifacts.py（本地与 CI 同一份脚本）。`inputs.prerelease`
+#   只在 **tag ref** 上 dispatch 才可达（跑 tag 得 `gh workflow run release.yml --ref v0.2.1`）；分支 ref 的 dispatch 与
+#   push 一样被 release job 的 `if: github.ref_type == 'tag'` 挡在发布之外。
+#
+# M145 拆分（本文件与 packaging/README.md 都已顶到 400 行红线，下一处改动必越线）：本文件只留**触发 + 槽位表 + 编排**，
+#   两个 job 的实体各搬一份可复用工作流（`workflow_call`），步骤逐字未改：
+#   - `.github/workflows/release-build.yml` = 原 `build` job 全流程（Linux 依赖 / arm64 工具链体检 / cargo build /
+#     静态 CRT 导入表门禁 / 打包 / 归档自检 / 上传 artifact / arm64 收尾注解），矩阵键换成同名 `inputs.*`。
+#   - `.github/workflows/release-publish.yml` = 原 `release` job 全流程（`PUBLISH_SLOTS` 白名单 / 裁剪 / 重算
+#     SHA256SUMS / 渲染说明 / `gh release` 幂等），`secrets.GITHUB_TOKEN` 改为显式透传的 secret。
+#   `on` / `env` / `permissions` / `concurrency` 与 `plan` 的槽位表**一字未动**。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      all_slots:
+        description: "构建全部六个槽位（含未验证的 Linux/macOS 四档）；默认只跑两个 Windows"
+        type: boolean
+        default: false
+      prerelease:
+        description: "标记为 pre-release（仅在 tag ref 上 dispatch 时才生效）"
+        type: boolean
+        default: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # M139：矩阵不写死在 `build` 里，改由本 job 按 `inputs.all_slots` 生成 —— 矩阵不能带 `if`，而 `jobs.<id>.strategy`
+  # 可读 `needs`，故用 `fromJSON(needs.plan.outputs.matrix)`。**槽位表只在下面这一处**，改槽位只改这里。
+  plan:
+    name: 选槽位（默认两个 Windows）
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: 生成 build 矩阵（`all_slots=true` 才整表六槽位）
+        id: pick
+        shell: bash
+        env:
+          ALL_SLOTS: ${{ inputs.all_slots }}
+        run: |
+          set -euo pipefail
+          python3 - "$ALL_SLOTS" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          # 槽位表（唯一真相源）。mode："ci" = 默认在 CI 里构建；"probe" = 未验证，仅 all_slots=true 时构建。
+          # **没有交叉槽位**（M140）：每槽在自己的架构上原生构建，故无 `target` 键、产物一律在 target/release。
+          # 要加回交叉槽位：`target` 键 + `build_dir=target/<triple>/release` + `rustup target add` 与 cargo 的 `--target`。
+          SLOTS = [
+              # Windows x64：MSVC + 静态 CRT（+crt-static）→ exe 不依赖 VC++ 可再发行包，双击即用的单文件。
+              dict(slot="windows-x64", os="windows-latest", build_dir="target/release", rustflags="-C target-feature=+crt-static", mode="ci"),
+              # Windows arm64：**原生** `windows-11-arm`（4C/16G，公开仓库免费；GitHub 文档的 Standard runners 也列
+              # `windows-11-vs2026-arm`）。M140 前是在 windows-latest 上交叉，**CI 从未成功过一次**（v0.2.1 首跑红在
+              # 工具链体检，M141/M142 在此修）。原生还让 `ull --version` 冒烟真跑，dumpbin 走 Hostarm64 分支。
+              dict(slot="windows-arm64", os="windows-11-arm", build_dir="target/release",
+                   rustflags="-C target-feature=+crt-static", mode="ci"),
+              # ↓ 四档**未验证，不纳入 CI**：从未真构建成功、也没在真机跑过，默认一个都不编；`all_slots=true` 时照编
+              #   （将来验证 Linux/macOS 的唯一入口，别删）。真机验过后：mode 改 "ci" + 键加进 PUBLISH_SLOTS +
+              #   同步 README §1/§9 与 release-notes.md。Linux 固定 22.04 而非 latest：否则 glibc 地板跟着 runner 漂移。
+              dict(slot="linux-x64", os="ubuntu-22.04", build_dir="target/release", rustflags="", mode="probe"),
+              dict(slot="linux-arm64", os="ubuntu-22.04-arm", build_dir="target/release", rustflags="", mode="probe"),
+              # macOS：latest = arm64；Intel x64 用 macos-15-intel（macos-13 已下线）。
+              dict(slot="macos-arm64", os="macos-latest", build_dir="target/release", rustflags="", mode="probe"),
+              dict(slot="macos-x64", os="macos-15-intel", build_dir="target/release", rustflags="", mode="probe"),
+          ]
+          keep = [s for s in SLOTS if s["mode"] == "ci" or sys.argv[1] == "true"]
+          print("matrix=" + json.dumps({"include": keep}, separators=(",", ":")))
+          print("本次构建槽位：" + " ".join(s["slot"] for s in keep), file=sys.stderr)
+          PY
+
+  # 构建实体在 release-build.yml（`workflow_call`）。矩阵仍由上面 `plan` 生成、**在外层展开**：`strategy.matrix`
+  # 必须在调用侧求值（被调方只按单个槽位的四个入参跑），所以 `matrix.*` 只出现在这个 job 的 `with:` 里。
+  build:
+    name: build (${{ matrix.slot }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # 可复用工作流的权限只取「调用方 ∩ 被调方」，且不继承调用方的 `env`：两边都声明 read（与原 build job 一致）。
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-build.yml
+    with:
+      slot: ${{ matrix.slot }}
+      os: ${{ matrix.os }}
+      build_dir: ${{ matrix.build_dir }}
+      rustflags: ${{ matrix.rustflags }}
+    secrets:
+      # （M149）微软登录的公共客户端 id：值来自仓库 Secret，被调方把它烘进发布二进制（`option_env!` 注入）。
+      # 可复用工作流拿不到调用方未显式传入的 secret，故必须按名传（与下面 PUBLISH_TOKEN 同一模式，
+      # 不用 `inherit`：那会把仓库全部 secret 一起透进被调方）。Secret 未录入时求值为空串，被调方把空白
+      # 当「没配」——产物只是不带 id，不会拿空 id 去联网。
+      ULL_MSA_CLIENT_ID: ${{ secrets.ULL_MSA_CLIENT_ID }}
+
+  release:
+    name: GitHub Release
+    needs: build
+    # `always()` + `!cancelled()`：白名单外的槽位（现在的 `windows-arm64`，以及只在 `all_slots` 取证跑里存在的四档）
+    # 红了**不能连坐** x64 发布 —— 真正拦发布的是被调方「发布白名单齐全性」那一步：白名单里少任何一个才 fail。
+    # tag 门禁留在这里（不在被调方）：分支 ref 的 dispatch 连发布 job 都不该起。
+    if: always() && !cancelled() && github.ref_type == 'tag'
+    # `contents: write` 必须由**调用方**授予：可复用工作流只能收窄权限、不能提权（交集语义）。
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-publish.yml
+    secrets:
+      # 可复用工作流拿不到调用方未显式传入的 secret；`gh release` 用的就是这一枚安装令牌。
+      PUBLISH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

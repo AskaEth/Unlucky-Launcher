@@ -1,0 +1,44 @@
+[package]
+name = "unlucky-agent"
+description = "Unlucky-Launcher AI Agent：工具注册表 + 内置客户端 + MCP server（双形态共用一个内核）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 依赖方向：agent 依赖 core 的公共 API，core 不知道 agent 的存在（AGENTS.md §2）。
+# 端口层（src/port*.rs）让 agent 能在没有 core 实现时独立编译与测试；装配层用 core 实现
+# 填充 `Ports`（GUI 侧是 `crates/app`，headless 侧是 `crates/cli` 的 `ull agent serve`）。
+[dependencies]
+unlucky-core = { path = "../core", version = "0.2.2" }
+
+# 序列化：工具 JSON Schema 是手写 serde_json::Value（不引 schemars），
+# 工具结果 / 审计记录 / 事件流都用 serde derive。
+serde.workspace = true
+serde_json.workspace = true
+
+# LLM Provider + agent 循环。**锁精确版本**：rig 12 周 5 个 minor、CHANGELOG 满是 breaking
+# （DevDocs/PlanDoc/02-ai-agent-design.md §0 + research/02 §7 R1）。升级必须单独提交并跑回放回归。
+# 依赖面收口：整个 crate 只有 src/brain/rig.rs 允许 `use rig_*`。
+# feature `reqwest`：rig-core 0.45 的 default 只有 derive + rustls，HTTP 客户端要显式开；TLS 走 rustls
+# （免 OpenSSL，对 Win7/MinGW 友好，见 research/02 §7 R3）。
+rig-core = { version = "=0.45.0", features = ["reqwest"] }
+# TODO(M16-P1): 目前**声明但未使用**——对话循环/工具编排是自研的（要在中间插确认与审计）。
+# 保留是为了把版本按 02 §0 钉死；P1 接 rig 的 agent 运行时（工具服务句柄 / rig-cassette 回放 /
+# rig-rmcp 让内置 agent 吃 MCP）时再真正消费。若 P1 决定彻底不用，删这一行即可。
+rig-agent = "=0.45.0"
+
+# 异步运行时（rig 的 HTTP/流式需要）与流工具（消费 rig 的 Stream）。
+tokio.workspace = true
+futures-util.workspace = true
+
+# MCP server（M39）：rmcp 3.8 投影 + stdio / Streamable HTTP 传输。
+# 依赖面收口纪律与 rig 相同——整个 crate 只有 src/mcp/ 允许 `use rmcp::`。
+rmcp.workspace = true
+axum.workspace = true
+
+[lints]
+workspace = true
