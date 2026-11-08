@@ -1,0 +1,247 @@
+name: Release / build（可复用）
+
+# Release 流水线的**构建侧**（M145 拆分：`release.yml` 与 `packaging/README.md` 都顶到 400 行红线，下一处改动必越线）。
+# 本文件 = 拆分前 `.github/workflows/release.yml` 的 `build` job **逐字搬家**，唯一的改动是四个矩阵键换成同名入参：
+#   `matrix.slot` → `inputs.slot`、`matrix.os` → `inputs.os`、`matrix.build_dir` → `inputs.build_dir`、
+#   `matrix.rustflags` → `inputs.rustflags`。其余 `name` / `if` / `env` / `run` / `uses` 与拆分前逐行相同。
+# 矩阵**仍由调用方** `release.yml` 的 `plan` job 生成并在外层展开（矩阵不能带 `if`，`strategy` 可读 `needs`），
+# 本文件只跑**单个槽位**，不持有槽位表 —— 改槽位只改 `release.yml` 里那一处。
+# `env` 必须在被调方重复声明：**被调工作流不继承调用方的 workflow 级 `env`**（CARGO_TERM_COLOR / RUST_BACKTRACE
+# 都是构建产物的实参：前者只影响日志着色，后者决定 panic 是否打回溯）。
+
+on:
+  workflow_call:
+    inputs:
+      slot:
+        description: "槽位键，同 plan matrix 的 slot（如 windows-x64 / linux-arm64）"
+        type: string
+        required: true
+      os:
+        description: "runner 标签，同 plan matrix 的 os（如 windows-latest / windows-11-arm）"
+        type: string
+        required: true
+      build_dir:
+        description: "产物根，同 plan matrix 的 build_dir（六槽位一律 target/release）"
+        type: string
+        required: true
+      rustflags:
+        description: "RUSTFLAGS，同 plan matrix 的 rustflags（两个 Windows 槽位为 -C target-feature=+crt-static，其余空）"
+        type: string
+        required: false
+        default: ""
+    # （M149）微软登录用的 Azure 公共客户端 id（公共客户端 id 随二进制一起分发，不按高密级处理，但**不进 git
+    # 文件**：真值放仓库 Secret，用户在仓库设置里录入）。`required: false` 是刻意的——调用方没传（本地、
+    # 没有 runner 的镜像站、以及 Secret 尚未录入时）求值为空串，`client_id.rs` 把空白当「没配」，
+    # 于是非官方构建不烘 id，官方构建才烘。**调用方必须显式传**（`secrets: inherit` 或按名传）；
+    # 没传时这里是空，不会报错。
+    secrets:
+      ULL_MSA_CLIENT_ID:
+        description: "Azure 公共客户端 id，烘进发布二进制（构建期 option_env!）；留空 = 不烘"
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# 与拆分前 build job 拿到的凭据范围一致（可复用工作流的权限只取调用方与本文件的**交集**，故两边都声明 read）。
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ inputs.slot }})
+    runs-on: ${{ inputs.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux 图形栈构建依赖（winit / wgpu 编译期需要）
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libfontconfig1-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libwayland-dev libxcb1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # （M141/M142）windows-arm64 跑在**原生** `windows-11-arm` 上，本步查这台机器上 ARM64 库齐不齐：`+crt-static`
+      # 要 MSVC 的 `lib/arm64/libcmt.lib`，链接要 SDK 的 `um/arm64/kernel32.lib`。诊断**只走注解**（job 日志下载要
+      # token 我们没有，check-run 注解不用；每条一行，多行会被拼成一行截断，每步 error 注解上限 10 条）。
+      # **M142 修本步的自毁 bug**：`shell: bash` 实为 `bash -eo pipefail`，脚本里的 `set -uo pipefail` **关不掉** -e——
+      # M141 死在 `vc_lib=$(find 不存在的根 | head -n1)`（pipefail 把 find 的非零带进赋值、errexit 当场退出），
+      # **一条注解都没打**，上一轮只剩 `Process completed with exit code 1.`。四条规矩：① 显式 `set +e`；② 每处探测
+      # 自带 `|| true`；③ 问题记进 ERRORS 而不当场退出；④ 快照先打完、再由显式 `exit` 定红绿。门禁不降级（缺了就
+      # 就地补装再判），但 **arm64 红不挡发布**（PUBLISH_SLOTS 已无它），本槽位只取证。
+      - name: Windows ARM64 工具链体检（红不挡发布，只取证）
+        if: inputs.slot == 'windows-arm64'
+        shell: bash
+        run: |
+          set +e; set -uo pipefail; ERRORS=()   # -e 由 runner 命令行注入，只能显式关
+          say() { printf '::%s::[arm64sdk] %s\n' "$1" "$2"; [ "$1" = error ] && ERRORS+=("$2"); return 0; }
+          vs=("C:/Program Files/Microsoft Visual Studio" "C:/Program Files (x86)/Microsoft Visual Studio")
+          # SDK 根要放宽：新版装 `(x86)`、也有装 `Program Files`；老安装器把 lib 留在 Microsoft SDKs；
+          # VS 自己还带一份「SDK in VS」（`<VS>/Windows Kits/10/Lib`），用 vswhere 定位后追加。
+          sdk=("C:/Program Files (x86)/Windows Kits/10/Lib" "C:/Program Files/Windows Kits/10/Lib"
+               "C:/Program Files (x86)/Microsoft SDKs/Windows/v10.0A/Lib")
+          inst="C:/Program Files (x86)/Microsoft Visual Studio/Installer"; vspath=""
+          [ -x "$inst/vswhere.exe" ] && vspath=$("$inst/vswhere.exe" -latest -products '*' -property installationPath 2>/dev/null | head -n1 || true)
+          [ -n "$vspath" ] && sdk+=("${vspath//\\//}/Windows Kits/10/Lib")
+          # 下面两个探测正是 M141 断气处（find 起点不存在 → 非 0 → `| head` 的 pipefail 带进赋值 → errexit），故处处
+          # `|| true`：探不到就是「没找到」，由结论下判断，不许由它决定进程生死。
+          scan() { vc_lib=$(find "${vs[@]}" -maxdepth 11 -type f -path '*/VC/Tools/MSVC/*/lib/arm64/libcmt.lib' 2>/dev/null | head -n1 || true)
+            sdk_lib=$(find "${sdk[@]}" -maxdepth 6 -type f -path '*/um/arm64/kernel32.lib' 2>/dev/null | head -n1 || true); }
+          build=$(ls "${sdk[@]}" 2>/dev/null | grep -oE '^10\.0\.[0-9]+' | cut -d. -f3 | sort -u | tail -n1 || true)
+          scan
+          # 快照固定 4 行，**无论齐不齐都先打完**：齐了用 notice（绿跑也留证据 = 探测本身没坏），缺了用 error。
+          sev=error; [ -n "$vc_lib" ] && [ -n "$sdk_lib" ] && sev=notice
+          say "$sev" "探测根: $(for d in "${vs[@]}" "${sdk[@]}"; do [ -d "$d" ] && printf '%s=有 ' "$d" || printf '%s=无 ' "$d"; done)vswhere=$([ -x "$inst/vswhere.exe" ] && echo 有 || echo 无) vspath=${vspath:-<空>}"
+          v=""
+          for d in "${sdk[@]}"; do [ -d "$d" ] || continue
+            for t in "$d"/*/; do [ -d "$t" ] && v+="$(basename "$t")→um:[$(ls "$t/um" 2>/dev/null | tr '\n' ',')] "; done
+          done
+          say "$sev" "SDK Lib 版本→um 架构: ${v:-<没有任何版本目录>}（SDK build=${build:-未探到}）"
+          v=""
+          while IFS= read -r t; do v+="$(basename "$(dirname "$t")")→[$(ls "$t" 2>/dev/null | tr '\n' ',')] "; done \
+            < <(find "${vs[@]}" -maxdepth 7 -type d -path '*/VC/Tools/MSVC/*/lib' 2>/dev/null | head -n4)
+          say "$sev" "MSVC lib/ 架构: ${v:-<无 MSVC lib 目录>}"
+          say "$sev" "关键库: libcmt=${vc_lib:-缺失} kernel32=${sdk_lib:-缺失}"
+          if [ "$sev" = notice ]; then echo "ARM64 工具链齐: vc=$vc_lib sdk=$sdk_lib"; exit 0; fi
+          # 补装：VS 安装器就地 modify（门禁不降级：先补再判）。组件 ID 随 VS 大版本不同；**优先补一个尚未装上的
+          # SDK 版本**——同版本重装是 no-op，补不出 arm64 子目录。补装失败不致命，重探与结论给真相。
+          id=Microsoft.VisualStudio.Component.Windows11SDK.$([ "$build" = "26100" ] && echo 22621 || echo 26100)
+          [ "$build" = "19041" ] && id=Microsoft.VisualStudio.Component.Windows10SDK.20348
+          adds=""; [ -n "$vc_lib" ] || adds+="Microsoft.VisualStudio.Component.VC.Tools.ARM64 "; [ -n "$sdk_lib" ] || adds+="$id"
+          if [ -x "$inst/setup.exe" ] && [ -n "$vspath" ]; then
+            say error "补装: $vspath ← ${adds}（已装 SDK build=${build:-未装}）"
+            timeout 1200 "$inst/setup.exe" modify --installPath "$vspath" --quiet --norestart --nocache --wait \
+              --add ${adds} || say error "补装返回非 0：组件 ID 可能不被这台 VS 认（见下一条结论）"
+            scan
+          else say error "补装跳过: 无 vs_installer 或没定位到 VS 安装路径（vspath=${vspath:-<空>}）"; fi
+          if [ -z "$vc_lib" ] || [ -z "$sdk_lib" ]; then
+            say error "结论: 仍缺（libcmt=${vc_lib:-缺失} kernel32=${sdk_lib:-缺失}），共记 ${#ERRORS[@]} 条探测问题；门禁红、不摘 arm64——本槽位不在 PUBLISH_SLOTS 里，x64 照发"
+            exit 1
+          fi
+          echo "补装后齐全: vc=$vc_lib sdk=$sdk_lib"
+
+      # M118（D26）：**Slint 版停发** —— GUI 只有 `unlucky-launcher-iced`（`crates/app` 已 exclude，不进 workspace）。
+      # 产物名由 make_artifacts.py 的 `asset_stem()` 生成 `<名字>_<版本号>_<平台>_<架构>`；不传 `--target`（M140 起全原生）。
+      # （M149）`ULL_MSA_CLIENT_ID` 经 `option_env!` 烘进二进制（`crates/core/src/auth/microsoft/client_id.rs`）：
+      # 官方产物自带微软登录所需的配置，装完即可登录；运行期同名环境变量仍优先于它，可覆盖。
+      # 值来自仓库 Secret（不进 git 文件）；Secret 没配时这里是空串，client_id.rs 把空白当「没配」，
+      # 于是非官方构建不烘 id。想自己烘一份就从源码构建：`ULL_MSA_CLIENT_ID=<id> cargo build`。
+      - name: cargo build --release --locked
+        shell: bash
+        env:
+          RUSTFLAGS: ${{ inputs.rustflags }}
+          ULL_MSA_CLIENT_ID: ${{ secrets.ULL_MSA_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --bin unlucky-launcher-iced --bin ull
+
+      - name: Windows 单文件自检（导入表不得出现 VC++ 可再发行 DLL）
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          # 校验的是**构建产物**（iced bin 原始名）；对外名 `unlucky-launcher` 由 make_artifacts.py 落盘时才换上。
+          EXE: ${{ inputs.build_dir }}/unlucky-launcher-iced.exe
+        run: |
+          set -euo pipefail
+          # +crt-static 是否真生效只看导入表：出现 VCRUNTIME/MSVCP/msvcr/ucrtbase 就是还得装可再发行包，fail。
+          # dumpbin 定位链（三级，全不命中才 fail —— 门禁不降级）：① vswhere ② find 兜底（两个 VS 根都扫）③ PATH
+          # （排最后是刻意的：最不可控）。dumpbin 在 MSVC 的**宿主**工具目录里：x64 runner 是 `Hostx64/x64`，arm64
+          # runner（M140）是 `Hostarm64/arm64`（反向不行——x64 上挑 Hostarm64 是跑不起来的二进制）。
+          pats=('VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe')
+          if [ "${RUNNER_ARCH:-X64}" = "ARM64" ]; then
+            pats=('VC/Tools/MSVC/*/bin/Hostarm64/arm64/dumpbin.exe' "${pats[@]}")
+          fi
+          VSWHERE="C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+          DUMPBIN=""
+          VIA=""
+          if [ -x "$VSWHERE" ]; then
+            # `-find` 是**单值**参数：一次传多个 pattern 只有一个生效（3.x 取最后一个 —— 老写法里 Hostarm64 因此永远
+            # 轮不到），故每个 pattern 各起一次定位器，不赌它取哪个。反斜杠形态优先（官方文档即此形式），再试正斜杠。
+            for p in "${pats[@]}"; do
+              for pat in "${p//\//\\}" "$p"; do
+                hit=$("$VSWHERE" -latest -products '*' -find "$pat" 2>/dev/null | head -n1 || true)
+                if [ -n "$hit" ]; then DUMPBIN=${hit//\\//}; VIA="vswhere"; break 2; fi
+              done
+            done
+          fi
+          if [ -z "$DUMPBIN" ]; then
+            # VS 根形如 <年>/<版次>（2022/Enterprise、2022/BuildTools……），固定层数的 glob 会踩空，按模式扫。
+            find_pat=()
+            for p in "${pats[@]}"; do find_pat+=(-o -path "*/$p"); done
+            DUMPBIN=$(find "C:/Program Files/Microsoft Visual Studio" \
+                           "C:/Program Files (x86)/Microsoft Visual Studio" \
+                           -maxdepth 11 -type f \( "${find_pat[@]:1}" \) 2>/dev/null | head -n1 || true)
+            if [ -n "$DUMPBIN" ]; then VIA="find"; fi
+          fi
+          if [ -z "$DUMPBIN" ]; then
+            hit=$(command -v dumpbin || true)
+            if [ -n "$hit" ]; then DUMPBIN=$hit; VIA="PATH"; fi
+          fi
+          # 工具缺失同样 fail："找不到就跳过"等于让这道门禁在最需要它的时候静默失效。
+          if [ -z "$DUMPBIN" ]; then echo "::error::找不到 dumpbin，无法校验导入表（静态 CRT 门禁不降级）"; exit 1; fi
+          echo "dumpbin: $DUMPBIN（定位自 $VIA）"
+          ls -l "$EXE"
+          "$DUMPBIN" -nologo -dependents "$EXE" | tee dependents.txt
+          if grep -Eiq 'VCRUNTIME|MSVCP|MSVCR|ucrtbase\.dll' dependents.txt; then
+            echo "::error::静态 CRT 未生效：exe 仍动态依赖 VC++ 可再发行包"; exit 1
+          fi
+
+      - name: 打包（产物 + SHA256SUMS）
+        shell: bash
+        env:
+          # 不把 `${{ }}` 直接拼进 bash 脚本：git ref 名允许 `$`/反引号/`"`，一律经 env 传入再展开。
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+          SLOT: ${{ inputs.slot }}
+          BUILD_DIR: ${{ inputs.build_dir }}
+        run: |
+          set -euo pipefail
+          # git-bash 与 Linux/macOS runner 的 python 入口名不一致，先探一遍。
+          PY=$(command -v python3 || command -v python)
+          # 槽位与产物根都从矩阵来（M140 起六个槽位都是 target/release），脚本据此定位产物并回读
+          # 可执行文件头校验架构：arm64 槽位现在是**真跑** `ull --version`，「宿主≠产物就跳过」只留给本地交叉。
+          args=(--slot "$SLOT" --build-dir "$BUILD_DIR")
+          if [ "$REF_TYPE" = "tag" ]; then
+            args+=(--version "$TAG")   # 与 Cargo.toml 版本交叉校验
+          fi
+          "$PY" packaging/make_artifacts.py "${args[@]}" --out dist
+          ls -l dist
+
+      - name: 归档内容自检（二进制定位 + 合规文本）
+        shell: bash
+        run: |
+          set -euo pipefail
+          for archive in dist/*.tar.gz; do
+            [ -e "$archive" ] || continue
+            listing=$(tar -tzf "$archive")
+            for required in unlucky-launcher LICENSE NOTICE README.md; do
+              if ! grep -q "/$required$" <<<"$listing"; then
+                echo "::error file=$archive::$archive 缺少 $required"
+                exit 1
+              fi
+            done
+            echo "OK: $archive 含二进制与 LICENSE/NOTICE/README.md"
+          done
+          if ls dist/*.exe >/dev/null 2>&1; then
+            echo "Windows 单 exe 形态：LICENSE/NOTICE/README.md 作为 Release 资产并列分发"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ inputs.slot }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+      # （M142）arm64 若红在别的步骤（cargo / 打包 / 导入表门禁），也要有一条注解说清「红在哪」和「不挡发布」——
+      # 只剩一句 `Process completed with exit code 1.` 的教训见上一条体检步骤。
+      - name: arm64 失败收尾注解（红不挡发布）
+        if: failure() && inputs.slot == 'windows-arm64'
+        shell: bash
+        run: echo "::error::[arm64] 本槽位已红（失败步骤见本 job 的步骤名与上面各条注解）；PUBLISH_SLOTS 当前只有 windows-x64 ⇒ 本次 Release 仍照发 x64，arm64 产物不进 Release"

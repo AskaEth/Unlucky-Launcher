@@ -1,0 +1,2 @@
+[12:00:03] [main/ERROR]: Could not find or load main class net.fabricmc.loader.impl.launch.knot.KnotClient
+java.lang.UnsupportedClassVersionError: net/fabricmc/loader/impl/launch/knot/KnotClient has been compiled by a more recent version of the Java Runtime (class file version 61.0), this version of the Java Runtime only recognizes class file versions up to 52.0

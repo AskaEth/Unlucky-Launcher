@@ -1,0 +1,152 @@
+# 规则库 · 模组互斥（8 条）
+# 移植自 HMCL CrashReportAnalyzer.Rule 的互斥组（analyse/02 §7.3 第 8 组）：
+# 具体到某个知名 mod 与 OptiFine / Sodium 的成名冲突，修复动作几乎都是「删 OptiFine 或其对手」。
+version: 1
+category: mod_conflict
+rules:
+  - id: conflict.optifine_forge
+    severity: critical
+    scope: file
+    # 移植说明：HMCL 原文里的 \> / \< 在这里改成裸 > / <（正则里 \< \> 是词边界断言，要字面量得写裸字符）。
+    # 末尾 alternative 保持 upstream 语义：`\(Reflector\.java)` 的前置 \( 是**字面括号**，尾部裸 ) 才是**闭合外层分组**，
+    # 因此它是前缀匹配。这里显式写成 `\(Reflector\.java(?::\d+)?\))`：裸 `(Reflector.java)` 与带行号的
+    # `(Reflector.java:455)` 两种真实栈帧形态都能命中（P2-1 回归，见 tests/diagnose/engine_rank.rs）。
+    pattern: >-
+      (java\.lang\.NoSuchMethodError: 'java\.lang\.Class sun\.misc\.Unsafe\.defineAnonymousClass\(java\.lang\.Class, byte\[\], java\.lang\.Object\[\]\)'|java\.lang\.NoSuchMethodError: 'void net\.minecraft\.client\.renderer\.texture\.SpriteContents\.<init>\(net\.minecraft\.resources\.ResourceLocation, |java\.lang\.NoSuchMethodError: 'void net\.minecraftforge\.client\.gui\.overlay\.ForgeGui\.renderSelectedItemName\(net\.minecraft\.client\.gui\.GuiGraphics, int\)'|java\.lang\.NoSuchMethodError: 'java\.lang\.String com\.mojang\.blaze3d\.systems\.RenderSystem\.getBackendDescription\(\)'|java\.lang\.NoSuchMethodError: 'net\.minecraft\.network\.chat\.FormattedText net\.minecraft\.client\.gui\.Font\.ellipsize\(net\.minecraft\.network\.chat\.FormattedText, int\)'|java\.lang\.NoSuchMethodError: 'void net\.minecraft\.server\.level\.DistanceManager\.(.*?)\(net\.minecraft\.server\.level\.TicketType, net\.minecraft\.world\.level\.ChunkPos, int, java\.lang\.Object, boolean\)'|java\.lang\.NoSuchMethodError: 'void net\.minecraft\.client\.renderer\.block\.model\.BakedQuad\.<init>\(int\[\], int, net\.minecraft\.core\.Direction, net\.minecraft\.client\.renderer\.texture\.TextureAtlasSprite, boolean, boolean\)'|TRANSFORMER/net\.optifine/net\.optifine\.reflect\.Reflector\.<clinit>\(Reflector\.java(?::\d+)?\))
+    confidence: 0.9
+    priority: 87
+    suppress:
+      - integrity.no_such_method
+      - integrity.no_class_def_found
+    cause:
+      key: diagnose.cause.conflict.optifine_forge
+      summary: 'OptiFine 与 Forge（或某个 Forge mod）不兼容：NoSuchMethodError 指向被 OptiFine 改写的原版方法'
+      detail: '删掉 OptiFine，改用同类替代（Sodium/Iris、Embeddium、Oculus 等），或换 OptiFine 的匹配版本'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - optifine
+        action: remove
+        note: 'OptiFine 与 Forge 冲突，删掉其一'
+    sample: samples/mod_conflict/optifine_forge.log
+    source: 'HMCL CrashReportAnalyzer.Rule.OPTIFINE_IS_NOT_COMPATIBLE_WITH_FORGE'
+
+  - id: conflict.shaders_mod
+    severity: critical
+    pattern: 'java\.lang\.RuntimeException: Shaders Mod detected\. Please remove it, OptiFine has built-in support for shaders\.'
+    confidence: 0.95
+    priority: 85
+    cause:
+      key: diagnose.cause.conflict.shaders_mod
+      summary: '装了独立的 Shaders Mod，但 OptiFine 自带光影支持，两者不能共存'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - shadersmod
+        action: remove
+    sample: samples/mod_conflict/shaders_mod.log
+    source: 'HMCL CrashReportAnalyzer.Rule.SHADERS_MOD'
+
+  - id: conflict.multipart_optifine
+    severity: critical
+    pattern: 'Error occurred applying transform of coremod META-INF/asm/multipart\.js function render'
+    confidence: 0.8
+    priority: 80
+    cause:
+      key: diagnose.cause.conflict.multipart_optifine
+      summary: 'Forge Multipart 的 coremod 转换失败（多为 OptiFine 同时存在导致）'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - optifine
+        action: remove
+        note: '删 OptiFine 或 ForgeMultipart 之一'
+    sample: samples/mod_conflict/multipart_optifine.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MOD_FOREST_OPTIFINE'
+
+  - id: conflict.performant_optifine
+    severity: critical
+    pattern: 'org\.spongepowered\.asm\.mixin\.injection\.throwables\.InjectionError: Critical injection failure: Redirector OnisOnLadder\(Lnet/minecraft/block/BlockState;Lnet/minecraft/world/World;Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/entity/LivingEntity;\)Z in performant\.mixins\.json:entity\.LivingEntityMixin failed injection check, \(0/1\) succeeded\. Scanned 1 target\(s\)\. Using refmap performant\.refmap\.json'
+    confidence: 0.9
+    priority: 86
+    cause:
+      key: diagnose.cause.conflict.performant_optifine
+      summary: 'Performant 与 OptiFine 的 mixin 冲突（LivingEntityMixin 注入失败）'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - performant
+          - optifine
+        action: remove
+        note: '两者只能留一个'
+    sample: samples/mod_conflict/performant_optifine.log
+    source: 'HMCL CrashReportAnalyzer.Rule.PERFORMANT_FOREST_OPTIFINE'
+
+  - id: conflict.twilight_optifine
+    severity: warning
+    pattern: 'java\.lang\.IllegalArgumentException: (.*) outside of image bounds (.*)'
+    confidence: 0.6
+    priority: 70
+    cause:
+      key: diagnose.cause.conflict.twilight_optifine
+      summary: '贴图越界（outside of image bounds）：1.16 上 Twilight Forest 与 OptiFine 的经典冲突'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - optifine
+        action: remove
+        note: '删 OptiFine 或 Twilight Forest 的兼容版本'
+    sample: samples/mod_conflict/twilight_optifine.log
+    source: 'HMCL CrashReportAnalyzer.Rule.TWILIGHT_FOREST_OPTIFINE'
+
+  - id: conflict.jade_optifine
+    severity: critical
+    pattern: 'Critical injection failure: LVT in net/minecraft/client/renderer/GameRenderer::m_109093_\(FJZ\)V has incompatible changes at opcode 760 in callback jade\.mixins\.json:GameRendererMixin->@Inject::jade\$runTick\(FJZLorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;IILcom/mojang/blaze3d/platform/Window;Lorg/joml/Matrix4f;Lcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/gui/GuiGraphics;\)V\.'
+    confidence: 0.9
+    priority: 86
+    cause:
+      key: diagnose.cause.conflict.jade_optifine
+      summary: 'Jade 与 OptiFine 在 1.20+ 冲突（GameRendererMixin 注入失败）'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - optifine
+          - jade
+        action: remove
+        note: '两者只能留一个'
+    sample: samples/mod_conflict/jade_optifine.log
+    source: 'HMCL CrashReportAnalyzer.Rule.JADE_FOREST_OPTIFINE'
+
+  - id: conflict.neoforge_optifine
+    severity: critical
+    pattern: 'cpw\.mods\.modlauncher\.InvalidLauncherSetupException: Invalid Services found OptiFine'
+    confidence: 0.9
+    priority: 86
+    cause:
+      key: diagnose.cause.conflict.neoforge_optifine
+      summary: 'NeoForge 与 OptiFine 不兼容（launcher setup 阶段就拒绝）'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - optifine
+        action: remove
+    sample: samples/mod_conflict/neoforge_optifine.log
+    source: 'HMCL CrashReportAnalyzer.Rule.NEOFORGE_FOREST_OPTIFINE'
+
+  - id: conflict.optifine_world_load
+    severity: critical
+    # 移植修正：HMCL 原文写的是 ChunkManager$ProxyTicketManager，Java 正则里 $ 是行尾锚点，
+    # 那条规则实际上永远命中不了。这里转义成字面量 $，规则才能真正生效。
+    pattern: 'java\.lang\.NoSuchMethodError: net\.minecraft\.world\.server\.ChunkManager\$ProxyTicketManager\.shouldForceTicks\(J\)Z'
+    confidence: 0.85
+    priority: 84
+    cause:
+      key: diagnose.cause.conflict.optifine_world_load
+      summary: 'OptiFine 导致世界无法加载（ChunkManager$ProxyTicketManager 方法被改写）'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - optifine
+        action: remove
+    sample: samples/mod_conflict/optifine_world_load.log
+    source: 'HMCL CrashReportAnalyzer.Rule.OPTIFINE_CAUSES_THE_WORLD_TO_FAIL_TO_LOAD'

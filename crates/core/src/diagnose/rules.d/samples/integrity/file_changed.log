@@ -1,0 +1,2 @@
+[12:00:30] [main/ERROR]: Failed to verify class file
+java.lang.SecurityException: SHA1 digest error for net/minecraft/client/main/Main.class

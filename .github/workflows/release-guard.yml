@@ -1,0 +1,40 @@
+name: Release guard
+
+# 发布标记语义守门（M163）：**push tag 默认创建稳定版**这条不许只靠注释保证。
+#
+# 判据全部在 `packaging/check_release_semantics.py`，它做四件事：
+#   ① 标记表：push tag（空串）的 create **不含** --prerelease；dispatch true ⇒ 预发布；
+#      dispatch false ⇒ create 稳定、edit 显式摘标记；非法取值必须抛。
+#   ② 真 bash 往返：把 `packaging/release_marker.py --emit-bash` 的产物 source 进 bash，
+#      读回 create_mark / edit_mark 两个数组——证明流水线**真跑的那段代码**对，不只是函数对。
+#   ③ release-publish.yml 的可执行内容里没有 --prerelease 字面量：标记只能从那张表来。
+#   ④ release.yml 的 dispatch 默认值 == false（读 YAML 结构，不是 grep 字符串）。
+# 最后一步 `--self-mutation` 是这条守门自己的变异自测：把「默认值改回 true」「塞回字面量」
+# 「表里 push 分支改成预发布」逐项注入临时副本，断言守门**每一项都红**、基线绿。守门自己
+# 抓不住回归时它会先红，所以这条断言不会变成装饰品。
+#
+# 为什么不并进 guards.yml：那份文件已经 398 行（400 行红线），再挂一个 job 必越线。
+# 改 `release.yml` 的 prerelease 输入 / 改那段 `gh release` 时，先跑
+# `python3 packaging/check_release_semantics.py`（本机可用 `python`，脚本会自己找 bash）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-semantics:
+    name: 发布标记语义守门（push tag → 稳定版）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 标记表自检（push tag ⇒ 稳定版）
+        run: python3 packaging/release_marker.py --self-test
+      - name: 语义断言（标记表 / bash 往返 / 流水线只用表 / dispatch 默认值）
+        run: python3 packaging/check_release_semantics.py
+      - name: 变异自测（守门抓不抓得住回归）
+        run: python3 packaging/check_release_semantics.py --self-mutation
