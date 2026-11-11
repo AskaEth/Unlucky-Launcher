@@ -1,0 +1,155 @@
+name: Release
+
+# 发布流水线：tag `v*` → **默认构建四个槽位**（原生 `windows-latest` / `windows-11-arm` / `ubuntu-22.04` /
+#   `ubuntu-22.04-arm`）→ 单文件产物 + SHA256SUMS → artifact + GitHub Release。**push tag 默认创建稳定版**（M163：不带
+#   `--prerelease`，否则 `releases/latest` 永远 404、自更新通道取不到清单）；同 tag 重跑幂等（覆盖资产与说明、不 create、
+#   不碰标记）。
+# **构建 ≠ 发布**：只有 `PUBLISH_SLOTS` 里的槽位才进 Release 与 SHA256SUMS ——**M184 起是 `windows-x64` + `linux-x64`**。
+#   `linux-x64` 本轮翻牌的依据在 `packaging/docs/linux-evidence.md`：x86_64 槽位在 `ubuntu-22.04`（glibc 2.35，与本地
+#   WSLg 验证同一地板）真编出 release 产物、真开窗渲出一帧，`release-build.yml` 里还有一条同槽位的 xvfb 运行时门禁
+#   ——「声明为 ci 就必须真能跑出帧」，不是「矩阵里写了就算支持」。
+#   **`linux-arm64` 本轮只构建、不发布**：它没有任何运行时证据（没有 ARM64 真机跑过一帧，也没有 arm64 的 xvfb 冒烟）。
+#   解锁条件写在 `packaging/release-notes.md` 与 `packaging/docs/compliance-support-boundaries.md` §9 ——真机跑一帧之后
+#   才把键加进 `PUBLISH_SLOTS`，不拿没跑过的包去发（M184 tower 裁决）。
+#   `windows-arm64` 仍留矩阵里取证、红了不挡 x64 发布（M142/M164：它那五轮红全红在一个误判的编译前体检步，该门禁已拆，
+#   判定权交回编译器）。`macos-*` 两档从未验证，默认连构建都不跑（M139：省配额、不留红叉）；整表六槽位取证走
+#   `gh workflow run release.yml -f all_slots=true`（槽位表在 `plan`）。
+# 名单 ⇄ 产物两个方向都有守卫（M164）：`packaging/check_publish_slots.py`（PR 阶段在 release-guard.yml，发布侧在
+#   release-publish.yml 的 `--dist` 模式）——声明了缺产物 ⇒ 红；有产物没声明 ⇒ `::warning::` 明说未发布。
+# 契约唯一真相源 packaging/README.md，打包本体 packaging/make_artifacts.py（本地与 CI 同一份脚本）。`inputs.prerelease`
+#   只在 **tag ref** 上 dispatch 才可达（跑 tag 得 `gh workflow run release.yml --ref v0.2.1`）；分支 ref 的 dispatch 与
+#   push 一样被 release job 的 `if: github.ref_type == 'tag'` 挡在发布之外。
+#
+# M145 拆分（本文件与 packaging/README.md 都已顶到 400 行红线，下一处改动必越线）：本文件只留**触发 + 槽位表 + 编排**，
+#   两个 job 的实体各搬一份可复用工作流（`workflow_call`），步骤逐字未改：
+#   - `.github/workflows/release-build.yml` = 原 `build` job 全流程（Linux 依赖 / arm64 工具链取证（M164 起只取证）/
+#     cargo build / 静态 CRT 导入表门禁 / 打包 / 归档自检 / 上传 artifact / arm64 收尾注解），矩阵键换成同名 `inputs.*`。
+#   - `.github/workflows/release-publish.yml` = 原 `release` job 全流程（`PUBLISH_SLOTS` 白名单 / 裁剪 / 重算
+#     SHA256SUMS / 渲染说明 / `gh release` 幂等），`secrets.GITHUB_TOKEN` 改为显式透传的 secret。
+#     （M164 在裁剪前插了一步「发布名单守卫」：主线 7 步，本分支 8 步。）
+#   `on` / `env` / `permissions` / `concurrency` 与 `plan` 的槽位表**一字未动**。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      all_slots:
+        description: "构建全部六个槽位（含未验证的 macOS 两档）；默认只跑四个（Windows 两档 + Linux 两档）"
+        type: boolean
+        default: false
+      prerelease:
+        # 默认 false（M163）：这是「新建 / 改写 Release 打不打预发布」的唯一开关，默认值必须落在稳定版上——
+        # Actions 页面点一次 "Run workflow" 就是这条默认值在决定新版本进不进稳定通道。
+        # 三种触发各自创建什么由 packaging/release_marker.py 一张表定义，守门在
+        # packaging/check_release_semantics.py（`.github/workflows/release-guard.yml` 跑它）。
+        description: "标记为 pre-release（默认 false = 稳定版；仅在 tag ref 上 dispatch 时才生效）"
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # M139：矩阵不写死在 `build` 里，改由本 job 按 `inputs.all_slots` 生成 —— 矩阵不能带 `if`，而 `jobs.<id>.strategy`
+  # 可读 `needs`，故用 `fromJSON(needs.plan.outputs.matrix)`。**槽位表只在下面这一处**，改槽位只改这里。
+  plan:
+    name: 选槽位（默认四个：Windows 两档 + Linux 两档）
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: 生成 build 矩阵（`all_slots=true` 才整表六槽位）
+        id: pick
+        shell: bash
+        env:
+          ALL_SLOTS: ${{ inputs.all_slots }}
+        run: |
+          set -euo pipefail
+          python3 - "$ALL_SLOTS" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          # 槽位表（唯一真相源）。mode："ci" = 默认在 CI 里构建；"probe" = 未验证，仅 all_slots=true 时构建。
+          # **没有交叉槽位**（M140）：每槽在自己的架构上原生构建，故无 `target` 键、产物一律在 target/release。
+          # 要加回交叉槽位：`target` 键 + `build_dir=target/<triple>/release` + `rustup target add` 与 cargo 的 `--target`。
+          SLOTS = [
+              # Windows x64：MSVC + 静态 CRT（+crt-static）→ exe 不依赖 VC++ 可再发行包，双击即用的单文件。
+              dict(slot="windows-x64", os="windows-latest", build_dir="target/release", rustflags="-C target-feature=+crt-static", mode="ci"),
+              # Windows arm64：**原生** `windows-11-arm`（4C/16G，公开仓库免费）。该标签自 2026-09 起是
+              # **Windows 11 Arm64 + Visual Studio 2026** 镜像（VS 在 `C:\Program Files\Microsoft Visual Studio\18`），
+              # 镜像清单里 `VC.Tools.ARM64` 与 `Windows11SDK.22621/26100` 都装好了。M140 前是在 windows-latest 上交叉；
+              # v0.2.1~v0.2.3 的红全红在 M141/M142 那个**编译前体检**步（cargo 永远 skipped），M164 已把它降级为只取证。
+              # 原生还让 `ull --version` 冒烟真跑，dumpbin 走 Hostarm64 分支。
+              dict(slot="windows-arm64", os="windows-11-arm", build_dir="target/release",
+                   rustflags="-C target-feature=+crt-static", mode="ci"),
+              # ↓ Linux 两档（M184）：**都改为 `mode: ci`** —— tag 推送默认就编，不再只在 `all_slots=true` 的取证跑里出现。
+              #   Linux 固定 22.04 而非 latest：否则 glibc 地板跟着 runner 漂移（22.04 = glibc 2.35，与本地 WSLg 验证同一地板）。
+              #   两档的差别只在「有没有运行时证据」，而这件事由 `PUBLISH_SLOTS`（发布侧那一行）决定，不在这里：
+              #   `linux-x64` 已真机验过（release 产物在 WSLg 真窗口渲出一帧 + 同槽位的 xvfb 门禁，证据见
+              #   `packaging/docs/linux-evidence.md`）⇒ 进名单；`linux-arm64` 只有构建、**运行时完全未验**（没有 arm64 真机
+              #   跑过一帧）⇒ 不进名单，产物照出 artifact 供取证，靠 `check_publish_slots.py` 打 `::warning::` 明说未发布。
+              #   **别把 arm64 直接加进名单**：解锁条件是真机跑一帧，不是「构建绿了」。
+              dict(slot="linux-x64", os="ubuntu-22.04", build_dir="target/release", rustflags="", mode="ci"),
+              dict(slot="linux-arm64", os="ubuntu-22.04-arm", build_dir="target/release", rustflags="", mode="ci"),
+              # ↓ 两档 macOS **未验证，不纳入 CI**：从未真构建成功、也没在真机跑过，默认一个都不编；`all_slots=true` 时照编
+              #   （将来验证 macOS 的唯一入口，别删）。真机验过后：mode 改 "ci" + 键加进 PUBLISH_SLOTS +
+              #   同步 README §1/§9 与 release-notes.md。
+              # macOS：latest = arm64；Intel x64 用 macos-15-intel（macos-13 已下线）。
+              dict(slot="macos-arm64", os="macos-latest", build_dir="target/release", rustflags="", mode="probe"),
+              dict(slot="macos-x64", os="macos-15-intel", build_dir="target/release", rustflags="", mode="probe"),
+          ]
+          keep = [s for s in SLOTS if s["mode"] == "ci" or sys.argv[1] == "true"]
+          print("matrix=" + json.dumps({"include": keep}, separators=(",", ":")))
+          print("本次构建槽位：" + " ".join(s["slot"] for s in keep), file=sys.stderr)
+          PY
+
+  # 构建实体在 release-build.yml（`workflow_call`）。矩阵仍由上面 `plan` 生成、**在外层展开**：`strategy.matrix`
+  # 必须在调用侧求值（被调方只按单个槽位的四个入参跑），所以 `matrix.*` 只出现在这个 job 的 `with:` 里。
+  build:
+    name: build (${{ matrix.slot }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # 可复用工作流的权限只取「调用方 ∩ 被调方」，且不继承调用方的 `env`：两边都声明 read（与原 build job 一致）。
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-build.yml
+    with:
+      slot: ${{ matrix.slot }}
+      os: ${{ matrix.os }}
+      build_dir: ${{ matrix.build_dir }}
+      rustflags: ${{ matrix.rustflags }}
+    secrets:
+      # （M149）微软登录的公共客户端 id：值来自仓库 Secret，被调方把它烘进发布二进制（`option_env!` 注入）。
+      # 可复用工作流拿不到调用方未显式传入的 secret，故必须按名传（与下面 PUBLISH_TOKEN 同一模式，
+      # 不用 `inherit`：那会把仓库全部 secret 一起透进被调方）。Secret 未录入时求值为空串，被调方把空白
+      # 当「没配」——产物只是不带 id，不会拿空 id 去联网。
+      ULL_MSA_CLIENT_ID: ${{ secrets.ULL_MSA_CLIENT_ID }}
+
+  release:
+    name: GitHub Release
+    needs: build
+    # `always()` + `!cancelled()`：白名单外的槽位（`windows-arm64`、`linux-arm64`，以及只在 `all_slots` 取证跑里
+    # 存在的 macOS 两档）红了**不能连坐**那两档已发布的 —— 真正拦发布的是被调方「发布白名单齐全性」那一步：
+    # 白名单里少任何一个才 fail（M184 之后 `linux-x64` 也在白名单里，它红了就该拦）。
+    # tag 门禁留在这里（不在被调方）：分支 ref 的 dispatch 连发布 job 都不该起。
+    if: always() && !cancelled() && github.ref_type == 'tag'
+    # `contents: write` 必须由**调用方**授予：可复用工作流只能收窄权限、不能提权（交集语义）。
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-publish.yml
+    secrets:
+      # 可复用工作流拿不到调用方未显式传入的 secret；`gh release` 用的就是这一枚安装令牌。
+      PUBLISH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # （M190）清单签名私钥：被调方 release-publish.yml 用它签 `manifest.json`。没配时是空串，
+      # 签名步会带着「缺什么、怎么补」的注解当场红（宁可不出 Release，也不出未签名的 Release）。
+      ULL_MANIFEST_SIGNING_KEY: ${{ secrets.ULL_MANIFEST_SIGNING_KEY }}

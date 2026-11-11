@@ -1,0 +1,34 @@
+// 细进度条（0.0~1.0）：安装进度 / 下载页顶部 / 向导进度共用。
+// 未知总量（known = false）时画一条不确定态的弱色轨道，而不是假装 0%。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+
+export component ProgressBar inherits Rectangle {
+    in property <float> ratio: 0.0;
+    in property <bool> known: true;
+    in property <length> bar-height: 6px;
+
+    height: root.bar-height;
+    border-radius: root.bar-height / 2;
+    background: Theme.bg-hover;
+    clip: true;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: root.known ? max(0px, root.width * clamp(root.ratio, 0.0, 1.0)) : 0px;
+        height: root.height;
+        border-radius: root.bar-height / 2;
+        background: Theme.accent;
+        animate width { duration: 180ms; easing: ease-out; }
+    }
+
+    if !root.known : Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width / 3;
+        height: root.height;
+        border-radius: root.bar-height / 2;
+        background: Theme.accent-soft;
+    }
+}

@@ -1,0 +1,399 @@
+name: Guards
+
+# ⚠ 本文件所有 `run:` 都在 `bash -e {0}` 下跑（GitHub 未指定 shell 时的默认值），脚本里的
+# `set -uo pipefail` **关不掉 -e**：裸管道 / 裸赋值 `x=$(… | grep …)` 零命中时会把整步静默杀死，
+# 一条 `::error::` 都不打（M142 在 release-build.yml 栽过，M156 在这里补账）。探测一律 `if ! x=$(…)` 或 `$(… || true)`。
+
+# 架构与合规守门（与 fmt/clippy 同级，不允许 continue-on-error）：
+#   1. core-no-ui      —— crates/core 零 UI 依赖（D3 铁律），依赖表 + cargo tree 双查
+#   2. presenter-no-ui —— crates/presenter 零 UI 依赖（D26 / M85）：Slint 版与 iced 版共用的宿主层
+#   3. design-zero-dep —— crates/design 零第三方依赖（M61 / M87）：依赖表（含 dev/build）必须为空 + 依赖树只允许出现自身
+#   4. file-size       —— 全仓代码/文档单文件 ≤400 行（用户硬约束）
+#   5. licenses        —— cargo-deny：许可证白名单 + GPL 依赖拦截 + 供应链来源校验
+#   6. unsafe-scope    —— 全仓 `allow(unsafe_code)` 的文件集合必须恰好等于期望集合（D36 / M91；M196 起两处）
+#
+# M118（D26）：根 Cargo.toml 已 `exclude = ["crates/app"]`（Slint 退役树）。逐条核对过本文件，
+# **没有**任何一条守卫以 `--workspace` 为前提，所以排除不会让它们空转：
+#   ① core-no-ui / presenter-no-ui / design-zero-dep —— 「manifest 文本 + `cargo tree -p <crate>`」
+#      口径，被守的 crate 仍是 workspace 成员，依赖树与排除前逐行一致；
+#   ② file-size / unsafe-scope —— 走 `git ls-files` / `git grep`，与构建图无关，**仍然覆盖
+#      `crates/app/**`**（源码还在仓库里，就还得守它的行数与 unsafe 落点）；
+#   ③ licenses —— 唯一走 workspace 依赖图的守卫。排除后 Slint 那棵树不再进图（实测 `cargo deny
+#      list` 里 `slint*` / `i-slint-*` 为 0 个），这与「不再随任何产物发布」一致；代价是它的许可证
+#      不再被本门禁审 —— 真要重新纳入发布，得先把它加回 workspace，门禁随之恢复。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # M133：日常线 `dev` 复用**同一份**守门脚本（`.github/workflows/dev-guards.yml` 里
+  # `uses: ./.github/workflows/guards.yml`）。这是**纯新增的触发方式**：上面三条与下面全部作业
+  # 一字未动，main / PR / dispatch 的触发与判据与加这行之前逐字相同。
+  # 为什么复用而不是复制：判据只能有一份。两份 unsafe 词法器（110 行状态机）各自演进，迟早出现
+  # 「dev 绿、main 红」的双真相，那时 dev 门禁就变成了装饰品。
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core-no-ui:
+    name: core 零 UI 守门
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 依赖表直查（crates/core/Cargo.toml 不得出现 UI 框架）
+        run: |
+          set -uo pipefail
+          forbidden='slint|egui|eframe|iced|winit|gtk|javafx|tauri|fltk|druid|relm'
+          # 只看非注释行：manifest 里说明「不许出现 slint」的注释本身不该触发守门
+          if grep -vE '^[[:space:]]*#' crates/core/Cargo.toml | grep -nEi "$forbidden"; then
+            echo "::error file=crates/core/Cargo.toml::core 不得依赖 UI 框架（见 AGENTS.md 硬约束）"
+            exit 1
+          fi
+          echo "OK: crates/core/Cargo.toml 无 UI 依赖"
+      - name: 依赖树泄漏检查（cargo tree -p unlucky-core，排除自身行）
+        run: |
+          set -uo pipefail
+          forbidden='slint|egui|eframe|iced|winit|gtk|javafx|tauri|fltk|druid|relm'
+          # 与下方 presenter / design 的 `if ! tree=$(…)` 对称：cargo tree 自己失败（改名 / 解析失败）时裸赋值会被 -e 静默杀死，只剩 exit code 1 无注解。
+          if ! tree=$(cargo tree -p unlucky-core --edges normal --prefix none); then
+            echo "::error::cargo tree -p unlucky-core 执行失败 —— crate 是否仍叫 unlucky-core？"
+            exit 1
+          fi
+          echo "$tree"
+          if echo "$tree" | grep -vE '^unlucky-core v' | grep -qiE "$forbidden"; then
+            echo "::error::core 的依赖树出现 UI 框架 —— 传递依赖也不允许"
+            exit 1
+          fi
+          echo "OK: unlucky-core 依赖树零 UI"
+
+  # presenter 是 Slint 版（crates/app）与 iced 版（crates/app-iced）共用的唯一业务层（D26）。
+  # 一旦 slint/iced/winit 被拉进来，分层就废了，而编译与单测仍会全绿 —— 所以必须由 CI 守。
+  # M118 之后 Slint 版已被 workspace `exclude`，但本条**照样守得住**：它查的是 presenter 自己的
+  # manifest 与 `cargo tree -p unlucky-presenter`，与「谁在消费 presenter」无关；依赖树里一旦出现
+  # slint/iced/winit 仍会当场红。名单里的 slint 继续留着，就是为了防「把 UI 依赖偷偷塞进宿主层」。
+  # 与 core-no-ui 同样是「依赖表 + cargo tree」双查，名单保持一致；脚本刻意复制而非抽公共脚本，
+  # 理由是 CI 守门脚本自身挂掉的排查成本远高于这几行重复。
+  presenter-no-ui:
+    name: presenter 零 UI 守门
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 依赖表直查（crates/presenter/Cargo.toml 的依赖表不得出现 UI 框架）
+        run: |
+          set -uo pipefail
+          forbidden='slint|egui|eframe|iced|winit|gtk|javafx|tauri|fltk|druid|relm'
+          # 与 core-no-ui 的整文件 grep 不同：本 crate 的 description 合法地写着
+          # 「Slint 版与 iced 版共用」，整文件 grep 会把它当越线。所以先按表头切出依赖表
+          # （含 target.*.dependencies 与 dev/build 表），再去掉注释行，只查键名。
+          # 子表写法 `[dependencies.slint]` / `[target.'cfg(windows)'.dependencies.slint]`
+          # 是合法的等长写法，且表头本身带着包名，所以表头也要一并落进检查范围——
+          # 否则「子表 + optional + 非默认 feature」这种组合能同时骗过依赖表与 cargo tree。
+          awk '
+            /^[[:space:]]*\[/ {
+              in_deps = ($0 ~ /^[[:space:]]*\[(target\..*\.)?(dependencies|dev-dependencies|build-dependencies)(\.[^]]*)?\][[:space:]]*$/)
+              if (in_deps && $0 ~ /\.[^]]*\]/) printf "%d:%s\n", NR, $0
+              next
+            }
+            in_deps && !/^[[:space:]]*#/ && !/^[[:space:]]*$/ { printf "%d:%s\n", NR, $0 }
+          ' crates/presenter/Cargo.toml > /tmp/presenter-deps.txt
+          cat /tmp/presenter-deps.txt
+          if grep -iE "$forbidden" /tmp/presenter-deps.txt; then
+            echo "::error file=crates/presenter/Cargo.toml::presenter 不得依赖 UI 框架（D26）。窗口创建 / 渲染 / 图片解码属于 app 与 app-iced 侧；需要跨前端共用的类型请放进 presenter 的 dto。"
+            exit 1
+          fi
+          echo "OK: crates/presenter/Cargo.toml 依赖表无 UI 依赖"
+      - name: 依赖树泄漏检查（cargo tree -p unlucky-presenter，排除自身行）
+        run: |
+          set -uo pipefail
+          forbidden='slint|egui|eframe|iced|winit|gtk|javafx|tauri|fltk|druid|relm'
+          # 注意：cargo tree 命中 UI 框架时**退出码仍是 0**，所以只能抓输出再判断。
+          if ! tree=$(cargo tree -p unlucky-presenter --edges normal --prefix none); then
+            echo "::error::cargo tree -p unlucky-presenter 执行失败 —— crate 是否仍叫 unlucky-presenter？"
+            exit 1
+          fi
+          echo "$tree"
+          # 「零命中」本来就该是绿的正路，但裸赋值会把 grep 的 exit 1 交给 -e（见文件头）：
+          # M156 之前这里每次零命中都整步红且零注解 —— presenter-no-ui 自 M89 引入起从未绿过。
+          hits=$(printf '%s\n' "$tree" | grep -vE '^unlucky-presenter v' | grep -iE "$forbidden" || true)
+          if [ -n "$hits" ]; then
+            echo "::error::presenter 的依赖树出现 UI 框架（传递依赖也不允许），本次命中："
+            printf '%s\n' "$hits" | sed 's/^/  - /'
+            echo "::error::presenter 是 Slint 版与 iced 版共用的宿主层：把窗口 / 渲染 / 图片解码留在 app 侧，presenter 只持有与框架无关的 DTO、状态 reducer 与 host 装配。"
+            exit 1
+          fi
+          echo "OK: unlucky-presenter 依赖树零 UI"
+
+  # unlucky-design 是「纯数据 + 纯函数、零第三方依赖」的设计令牌层，这是 README 明写的卖点
+  # （连 serde 都不加），但目前只靠人肉守。零依赖的判据比 UI 名单更硬：依赖树只允许有自己一行。
+  # 注意 `cargo tree --edges normal` 看不到 dev/build 依赖，所以另设一步按表头切依赖表逐个查空。
+  design-zero-dep:
+    name: design 零第三方依赖守门
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 依赖表必须为空（dependencies / dev / build 表一律不许有键，含子表写法）
+        run: |
+          set -uo pipefail
+          # design 承诺的是「零第三方依赖」，不分 normal / dev / build —— 而 cargo tree
+          # --edges normal 对 dev/build 是瞎的。所以先按表头切出全部依赖表（含
+          # `[dependencies.serde]` 这类子表写法，表头本身携带包名），再看是否为空。
+          awk '
+            /^[[:space:]]*\[/ {
+              in_deps = ($0 ~ /^[[:space:]]*\[(target\..*\.)?(dependencies|dev-dependencies|build-dependencies)(\.[^]]*)?\][[:space:]]*$/)
+              if (in_deps && $0 ~ /\.[^]]*\]/) printf "%d:%s\n", NR, $0
+              next
+            }
+            in_deps && !/^[[:space:]]*#/ && !/^[[:space:]]*$/ { printf "%d:%s\n", NR, $0 }
+          ' crates/design/Cargo.toml > /tmp/design-deps.txt
+          if [ -s /tmp/design-deps.txt ]; then
+            cat /tmp/design-deps.txt
+            echo "::error file=crates/design/Cargo.toml::unlucky-design 的依赖表必须为空（normal / dev / build 都算），本次命中："
+            sed 's/^/  - /' /tmp/design-deps.txt
+            echo "::error::design 是纯数据 + 纯函数的设计令牌，README 对外承诺零第三方依赖（连 serde 都不加）：色彩 / 排版 / 形状 / 高程 / 动效请不要引入任何 crate，测试与构建辅助依赖同样不许加。序列化与运行时能力放到消费方（app / app-iced / presenter）。"
+            exit 1
+          fi
+          echo "OK: crates/design/Cargo.toml 依赖表全空（含 dev / build）"
+      - name: 依赖树只允许出现自身（cargo tree -p unlucky-design --edges normal）
+        run: |
+          set -uo pipefail
+          if ! tree=$(cargo tree -p unlucky-design --edges normal --prefix none); then
+            echo "::error::cargo tree -p unlucky-design 执行失败 —— crate 是否仍叫 unlucky-design？"
+            exit 1
+          fi
+          echo "$tree"
+          # 空行不算，剩下的每一行都必须是自己：正常时整个输出只有一行
+          # `unlucky-design v0.1.0 (/path/to/crates/design)`。
+          lines=$(printf '%s\n' "$tree" | grep -cE '[^[:space:]]' || true)
+          others=$(printf '%s\n' "$tree" | grep -vE '^[[:space:]]*$' | grep -vE '^unlucky-design v' || true)
+          if [ -n "$others" ] || [ "$lines" -ne 1 ]; then
+            echo "::error file=crates/design/Cargo.toml::unlucky-design 必须零第三方依赖，本应只有自身一行，实际 $lines 行；越线的包："
+            printf '%s\n' "$others" | sed 's/^/  - /'
+            echo "::error::design 是纯数据 + 纯函数的设计令牌：色彩 / 排版 / 形状 / 高程 / 动效请不要引入 serde、rand、once_cell 等任何 crate。序列化与运行时能力放到消费方（app / app-iced / presenter）。"
+            exit 1
+          fi
+          echo "OK: unlucky-design 依赖树只有自身，零第三方依赖"
+
+  # D36 定案：整窗 α 需要 `unsafe`（`SetLayeredWindowAttributes` 没有安全替代）。
+  # M196 加了第二处：控制台附着（`AttachConsole`）同样只有 Win32 一条路。两处各自成文件，
+  # 判据是**集合相等**而不是「黑名单命中」：
+  #   - 任何第三个显式放行 unsafe 的文件 → 红（黑名单写法在这里会假绿）；
+  #   - 落点文件把放行删掉 / 改名 / 搬走 → 红（否则门禁守着一条已经不存在的路径）；
+  #   - 多行属性、同行合并属性、多行 `cfg_attr`、`expect(unsafe_code)` 都已覆盖
+  #     （r2 前的行级正则对前两种会假绿，当时只能靠 ci.yml 的 fmt job 兜底；r3 起由词法器直接抓）。
+  unsafe-scope:
+    name: unsafe 落点守门（集合必须恰好等于期望）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 全仓显式放行 unsafe 的文件集合 == 期望集合
+        run: |
+          set -uo pipefail
+          EXPECTED=$'crates/app-iced/src/platform/win32/console.rs\ncrates/app-iced/src/platform/win32/transparency.rs'
+          # 扫描口径（M91 r3）：一个小词法器，而不是正则。
+          #
+          # 为什么必须用词法器：r2 的写法是「按全文方括号净深度合并续行」，但 Rust 里
+          # `['[', '(']`、`"[2"`、`starts_with("[2")` 这类**不配对括号字面量**会让深度永久跑偏，
+          # 于是该文件后面的一切（包括一个真的 `#[allow(unsafe_code)]`）都再也不会被扫到——
+          # 实测本仓 601 个文件里有 10 个扫到 EOF 仍非 0，`gate.rs` 就是其中之一（r3 复审实证：
+          # 在它尾部加作用域 allow，r2 门禁 exit 0 假绿）。
+          # 现在的做法：逐字符状态机（普通 / 行注释 / 块注释（可嵌套）/ 字符串 / raw 字符串 /
+          # 字符字面量），只在「普通态」里认 `#` 或 `#!` 紧跟 `[` 的属性起点，然后只在这一个
+          # 属性内部累计到它的 `]` 配平——数组字面量跨行不再参与合并，也就不会带偏。
+          #
+          # 放行的两种拼法都算：`allow(...)` 与 `expect(...)`。`expect(unsafe_code)` 同样会
+          # 放行 unsafe 代码（rustc 实测：`#![expect(unsafe_code)]` + `pub unsafe fn f() {}` 在
+          # `-D unsafe_code` 下编译通过），所以它必须被同一条判据抓住，不能只认 allow。
+          #
+          # 仍然抓不住的（已知边界，别当全覆盖）：
+          #   - 落点文件**内部**多开别的 unsafe 能力（本门禁只看「有没有放行属性」，不看 unsafe 块个数）；
+          #   - **在别处定义、这里只调用**的宏展开出来的 allow：宏体里直接写出的属性在源码文本里，
+          #     会被扫到；但「宏定义在别的文件、调用点展开出 allow」时，本文件源码里没有那个属性；
+          #   - 注释（行注释/块注释）与字符串（普通/raw）里的属性文本**刻意不算**：它们不构成放行；
+          #     代价是「真把 allow 写进字符串」这种写法不会被当作落点（它也确实不放行任何代码）；
+          #   - manifest 侧 `[lints.rust] unsafe_code = "allow"`：本门禁只扫 `*.rs`，看不见 Cargo.toml；
+          #
+          # r4 回归用例（属性内的 raw string / 字符字面量曾经是盲区；现在两处共用 step()，
+          # 它们不再是边界，但下面五条必须一直保持红/绿正确 —— 改这段词法器前先跑它们）：
+          #   红  #[doc = r#"a "b"#]                                 后跟真 allow
+          #   红  #[cfg_attr(docsrs, doc = r##"a " b "##)]            后跟真 allow
+          #   红  #[cfg_attr(docsrs, my_macro(39 as char))] 一类含字符字面量/转义的属性后跟真 allow
+          #       具体形态：#![cfg_attr(docsrs, my_macro('\''))] 后跟真 allow
+          #   红  以上三者的 CRLF 版本
+          #   绿  #[doc = r#"x" allow(unsafe_code) is banned "y"#]（纯文档，不得误报）
+          scan() {
+            awk -v path="$1" '
+              # ---- 唯一的状态机：主循环与属性内**共用**同一个 step() ----
+              # 为什么必须复用：r2 是「属性外一套状态机、属性内另写一套」，两套各自演进，
+              # r3 的属性内就只剩「遇 " 跳到下一个 "」，于是 raw string / 字符字面量在属性内
+              # 完全不认识 —— `#[doc = r#"a "b"#]` 之后的一切对门禁失明（假绿），
+              # `#[doc = r#"x" allow(unsafe_code) "y"#]` 这种纯文档被误报（误红）。
+              # 现在两处只认这一个 step()，属性解析只多一层「[ ] 深度决定何时离开属性」。
+              #
+              # 状态：0 普通 / 1 行注释 / 2 块注释（可嵌套）/ 3 字符串 / 4 raw 字符串 / 5 字符字面量。
+              # 返回值 = 本次消费到的位置（`//`、`/*`、`r#"`、raw 收尾会一次吃掉多个字符）；
+              # g_plain=1 表示该位置处在「普通态代码」里（注释/字符串内容一律 0，
+              # 所以它们既不会被当成属性、也不会参与属性内的 [ ] 计数与文本匹配）。
+              function step(s, n, i,   c, nx, j, h, ok) {
+                c = substr(s, i, 1)
+                g_plain = 0
+                if (g_state == 1) { if (c == "\n") g_state = 0; return i }
+                if (g_state == 2) {
+                  if (c == "/" && substr(s, i + 1, 1) == "*") { g_depth++; return i + 1 }
+                  if (c == "*" && substr(s, i + 1, 1) == "/") { g_depth--; if (g_depth <= 0) g_state = 0; return i + 1 }
+                  return i
+                }
+                if (g_state == 3) {
+                  if (c == "\\") return i + 1
+                  if (c == "\"" || c == "\n") g_state = 0
+                  return i
+                }
+                if (g_state == 4) {
+                  if (c == "\"") {
+                    ok = 1
+                    for (j = 1; j <= g_hashes; j++) if (substr(s, i + j, 1) != "#") ok = 0
+                    if (ok) { g_state = 0; return i + g_hashes }
+                  }
+                  return i
+                }
+                if (g_state == 5) {
+                  if (c == "\\") return i + 1
+                  if (c == g_q || c == "\n") g_state = 0
+                  return i
+                }
+                if (c == "/" && substr(s, i + 1, 1) == "/") { g_state = 1; return i + 1 }
+                if (c == "/" && substr(s, i + 1, 1) == "*") { g_state = 2; g_depth = 1; return i + 1 }
+                if (c == "\"") { g_state = 3; return i }
+                if (c == g_q) {
+                  nx = substr(s, i + 1, 1)
+                  if (nx == "\\" || substr(s, i + 2, 1) == g_q) { g_state = 5; return i }
+                  g_plain = 1
+                  return i
+                }
+                if (c == "r" || c == "b") {
+                  j = i + 1
+                  if (c == "b") {
+                    if (substr(s, j, 1) == "\"") { g_state = 3; return j }
+                    if (substr(s, j, 1) == g_q) { g_state = 5; return j }
+                    if (substr(s, j, 1) != "r") { g_plain = 1; return i }
+                    j++
+                  }
+                  h = 0
+                  while (substr(s, j, 1) == "#") { h++; j++ }
+                  if (substr(s, j, 1) == "\"") { g_hashes = h; g_state = 4; return j }
+                  g_plain = 1
+                  return i
+                }
+                g_plain = 1
+                return i
+              }
+              function lex(   s, line, n, i, j, k, ch, adepth, attr) {
+                s = ""
+                while ((getline line < path) > 0) s = s line "\n"
+                close(path)
+                n = length(s)
+                g_state = 0; g_depth = 0; g_hashes = 0; g_found = 0
+                for (i = 1; i <= n; i++) {
+                  i = step(s, n, i)
+                  if (!g_plain || substr(s, i, 1) != "#") continue
+                  j = i + 1
+                  if (substr(s, j, 1) == "!") j++
+                  if (substr(s, j, 1) != "[") continue
+                  # 属性：**复用 step()**，只多一层「[ ] 深度决定何时离开属性」。
+                  # 属性里的字符串 / raw 字符串 / 字符字面量因此与属性外同一套识别。
+                  attr = ""; adepth = 0; k = j
+                  while (k <= n) {
+                    k = step(s, n, k)
+                    if (g_plain) {
+                      ch = substr(s, k, 1)
+                      if (ch == "[") adepth++
+                      else if (ch == "]") adepth--
+                      attr = attr ch
+                      if (adepth <= 0) break
+                    }
+                    k++
+                  }
+                  if (attr ~ /(allow|expect)\([^]]*unsafe_code/) g_found = 1
+                  i = k
+                }
+                return g_found
+              }
+              BEGIN { g_q = "\047"; g_found = 0; exit(lex() ? 0 : 1) }
+            '
+          }
+          # 只对「文本里出现过 unsafe_code」的文件跑词法器（标识符不可能被空白拆开，
+          # 所以这个预筛不会漏）。601 个文件 → 个位数个候选，整个 job 约 2 秒。
+          # `git grep` 零匹配 exit 1 + pipefail → 裸赋值同样会被 -e 静默杀死（见文件头）。
+          actual=$(git grep -l 'unsafe_code' -- '*.rs' 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do
+            if scan "$f"; then printf '%s\n' "$f"; fi
+          done | LC_ALL=C sort || true)
+          echo "期望（恰好这两处，集合相等）：$EXPECTED"
+          echo "实际扫到的集合："
+          if [ -n "$actual" ]; then printf '%s\n' "$actual" | sed 's/^/  - /'; else echo "  （空）"; fi
+          if [ "$actual" != "$EXPECTED" ]; then
+            extra=$(printf '%s\n' "$actual" | grep -vxF "$EXPECTED" || true)
+            if [ -n "$extra" ]; then
+              echo "::error::多出来的 unsafe 落点（不在期望集合里）："
+              printf '%s\n' "$extra" | sed 's/^/  - /'
+            fi
+            if [ -n "$(printf '%s\n' "$EXPECTED" | grep -vxF "$actual" || true)" ]; then
+              echo "::error::期望集合里的落点没被扫到（放行属性被删 / 文件改名搬走？）："
+              printf '%s\n' "$EXPECTED" | grep -vxF "$actual" | sed 's/^/  - /' || true
+            fi
+            echo "::error::unsafe 的 FFI 只允许住在上面的期望集合里（D36 / M196）。新的 unsafe 能力要先立 mission：改守门 + 更新定案，不要顺手放行。"
+            exit 1
+          fi
+          echo "OK: 全仓显式放行 unsafe 的文件恰好等于期望集合"
+
+  file-size:
+    name: 文件行数 ≤400 守门
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 检查单文件行数
+        run: |
+          set -uo pipefail
+          LIMIT=400
+          failed=0
+          while IFS= read -r f; do
+            case "$f" in
+              LICENSE|*/LICENSE|LICENSE-*|*/LICENSE-*) continue ;;
+              CHANGELOG*|*/CHANGELOG*) continue ;;
+              # README 是「对外介绍」，不是可拆分的模块：拆成多份反而更难读，用户令
+              # （2026-11-05）明确「不用 400 行红线压它，但要保证介绍不臃肿、逻辑完备」。
+              # 只豁免仓库根的 README*.md；docs/ 下的长文仍按模块拆分。
+              README.md|README.*.md) continue ;;
+            esac
+            n=$(wc -l < "$f")
+            if [ "$n" -gt "$LIMIT" ]; then
+              echo "::error file=$f::$f 有 $n 行，超过 $LIMIT 行上限，请按模块拆分"
+              failed=$((failed + 1))
+            fi
+          # 覆盖范围含脚本（*.py/*.sh）：packaging/ 下的构建辅助脚本同样受 400 行约束；
+          # Cargo.lock 等机器生成文件刻意不在列（否则一生成就超限）
+          done < <(git ls-files '*.rs' '*.md' '*.slint' '*.yml' '*.yaml' '*.toml' '*.json' '*.py' '*.sh')
+          if [ "$failed" -ne 0 ]; then
+            echo "共 $failed 个文件超限"
+            exit 1
+          fi
+          echo "OK: 全部受检文件 ≤$LIMIT 行"
+
+  licenses:
+    name: 依赖许可与来源（cargo-deny）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # 只跑许可/禁用/来源三类，advisories 由后续安全轮次单独接管
+          # M118：cargo-deny 走 **workspace 依赖图**，`crates/app` 被 exclude 后 Slint 那棵树不再进图
+          # （实测 `cargo deny list` 里 `slint*` / `i-slint-*` 命中 0 个），所以本门禁不再审 Slint 的
+          # RF-2.0 许可 —— 与「它不再随任何产物发布」一致。这不是回退：`deny.toml` 里为 Slint 留的
+          # allow 条目**故意没删**（删它得先确认没有别的路径重新引入），当前等于一条死条目。
+          # 若将来把 `crates/app` 加回 workspace，本门禁的覆盖会自动恢复。
+          command: check licenses bans sources

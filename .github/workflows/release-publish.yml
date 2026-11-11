@@ -1,0 +1,221 @@
+name: Release / publish（可复用）
+
+# Release 流水线的**发布侧**（M145 拆分：`release.yml` 顶到 400 行红线）。本文件 = 拆分前 `release.yml` 的 `release`
+# job **逐字搬家**：裁剪白名单外的槽位产物、重算全量 `SHA256SUMS.txt`、渲染 `packaging/release-notes.md` 模板、
+# `gh release create/edit` 的同 tag 幂等，全部照旧。留在调用方 `release.yml` 的只有三件事：`needs: build`、
+# tag 门禁 `if: always() && !cancelled() && github.ref_type == 'tag'`、以及 `permissions: contents: write` 的授予。
+# **M164 新增一步**（其余仍照旧）：下载 artifact 之后、裁剪之前的「发布名单守卫」`packaging/check_publish_slots.py`
+# —— 原来那份「名单内少一档就 fail」的内联循环搬进那个脚本，并补上反方向（有产物没声明 ⇒ `::warning::` 未发布）。
+# 与拆分前的三处等价改写（都只涉及"从哪里读"，不涉及行为）：
+#   ① `secrets.GITHUB_TOKEN` → 本文件声明的入参 secret `PUBLISH_TOKEN`（调用方透传 `secrets.GITHUB_TOKEN`）。
+#      可复用工作流**拿不到**调用方未显式传入的 secret，写 `secrets.GITHUB_TOKEN` 会静默为空 → gh 401。
+#   ② `inputs.prerelease`（原为 `workflow_dispatch` 的输入）→ `github.event.inputs.prerelease`（**字符串**形态的同一个
+#      值：`push` 触发时不存在 ⇒ 空串，dispatch 时是 `"true"`/`"false"`）。**三种取值各自创建什么**（M163）由
+#      `packaging/release_marker.py` 一张表定义：空串 ⇒ 新建稳定版、edit 不碰标记；`true` ⇒ 新建成预发布；
+#      `false` ⇒ 新建稳定版、edit 显式摘掉标记。本文件把那两个数组 `source` 出来用，自己**不写** case；
+#      `packaging/check_release_semantics.py` 断言「本文件的可执行内容里没有 --prerelease 字面量」。
+#      为什么不用 `workflow_call` 入参转一道：dispatch 的 `inputs.prerelease` 是
+#      **boolean**，而「空值 vs true/false」这条三态语义只有字符串能表达 —— 布尔入参无法取空，硬塞进字符串入参则是
+#      类型不符（`uses` 的 `with:` 会按被调方声明的类型校验；actionlint 当场报 `bool value cannot be assigned`）。
+#      取 event 上的字符串形态既保住三态，又不需要任何类型转换。
+#   ③ `PUBLISH_SLOTS` / `runs-on` / `permissions` 的**内容**未动，只是被调方必须自己声明（被调方不继承调用方的
+#      workflow 级 `env`；权限取调用方与本文件的交集 —— 两边都声明 `contents: write` 才拿得到写权）。
+
+on:
+  workflow_call:
+    secrets:
+      PUBLISH_TOKEN:
+        description: "调用方透传 `secrets.GITHUB_TOKEN`（本 job 已声明 contents: write，`gh release` 用它发版）"
+        required: true
+      # （M190 r1 复审 P1-2）**必须在这里声明**：可复用工作流只拿得到自己声明过的 secret，调用方
+      # `release.yml` 按名传了这一个，若被调方不声明，它要么在调用处报错、要么静默求值为空串——
+      # 两种结局都是「用户已把钥录进 Secret，发布仍在签名步红，而错误文案反过来指控 Secret 没配」。
+      # `required: false` 是刻意的：缺省为空串，由签名步的 `::error::` + `exit 1` 做 fail-closed
+      # （与 `release-build.yml` 的 `ULL_MSA_CLIENT_ID` 同一模式），失败信息才和事实一致。
+      ULL_MANIFEST_SIGNING_KEY:
+        description: "清单签名私钥（JSON：key_id + seed_hex）；未配置时签名步 fail-closed、不出 Release"
+        required: false
+
+# 权限取交集：调用方 release.yml 的 release job 与本文件都声明 contents: write，交集才是 write（不声明则被收窄成 read）。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # ── 发布白名单：唯一决定「哪几个槽位进 Release」的开关（空格分隔，键同 matrix.slot）──
+      # **M184 起是 `windows-x64` + `linux-x64`**：`linux-x64` 已真机验过 —— release 产物在 Linux 真机（WSLg 真窗口）
+      # 渲出一帧、主题/后端日志齐全，并有一条同槽位的 xvfb 运行时门禁常驻在 `release-build.yml`（证据与实测输出见
+      # `packaging/docs/linux-evidence.md`）。进名单的代价是「每轮发版都得真出这个包」：齐全性检查是「名单内少一档就 fail」，
+      # 所以这条名单同时也是「linux-x64 构建红了就挡住整次发布」的闸 —— 与任务要求一致（声明为 ci 就得真能出包）。
+      # **`linux-arm64` 不在名单里，且这一轮刻意不放**：它只有构建证据，运行时完全没有证据（没有 ARM64 真机跑过一帧，
+      # 也没有 arm64 的 xvfb 冒烟）。解锁条件 = arm64 真机（或原生 runner）上真跑出一帧 + 主题日志 → 再把键加进这一行。
+      # 只加进矩阵不加进名单时，它的产物会被下面的裁剪步删掉，但守卫会先打 `::warning::` 明说「未发布、会被裁掉」，
+      # 不是静默丢弃（这条是任务里点名要验的反方向）。
+      # `windows-arm64` 同理仍不在名单（M142/M164：它的五轮红全红在误判的体检步，判定权已交回编译器，等下一 tag 的 CI 证）。
+      # **可逆，且只是一行**：真出包之后把键加进这一行（`"windows-x64 linux-x64 <新键>"`），齐全性检查与 SHA256SUMS
+      # 自动跟着扩，再同步 README §1/§9 与 release-notes.md 两张表。
+      # 判据不再靠注释保证：`packaging/check_publish_slots.py`（下面第二个 step 跑它；PR 阶段由 release-guard.yml
+      # 跑同一份脚本）两个方向都查——声明了缺产物 ⇒ `::error::` + exit 1；有产物但没声明 ⇒ `::warning::` 明说未发布。
+      # macOS 两档仍未验证，默认连构建都不跑（M139）。
+      PUBLISH_SLOTS: "windows-x64 linux-x64"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # （M164）发布名单守卫：**声明了就必须有产物**（名单内某个槽位缺 GUI 或 CLI 就红，少一档不发版），
+      # 反方向的「产物在、名单没声明」则打 `::warning::` 明说未发布 —— M142 之后那个方向是**静默**的（裁剪步只
+      # echo 一行 `drop:`，没有注解、也没有非零退出），一个真编出来的 arm64 会被就地 `rm` 掉而没人知道。
+      # 判据全在 `packaging/check_publish_slots.py`：同一份代码本地可跑，`--self-test` 注入 11 条回归断言该红的红。
+      # 它跑在**裁剪前**的全量集上（裁剪只删名单外的文件），所以是原来「裁剪后再查」那次检查的严格超集。
+      - name: 发布名单守卫（声明 ⇒ 必须有产物；有产物没声明 ⇒ 显式未发布）
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 packaging/check_publish_slots.py --dist dist --slots "$PUBLISH_SLOTS"
+
+      - name: 裁掉白名单外的槽位产物（构建取证 ≠ 发布）
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 槽位键 `windows-x64` 落到文件名是 `windows_x64`（asset_stem），故取文件名里的「平台_架构」两段比白名单。
+          keep=" "
+          for slot in $PUBLISH_SLOTS; do keep+="${slot//-/_} "; done
+          for f in dist/*; do
+            base=${f##*/}
+            [ "$base" = "SHA256SUMS.txt" ] && continue
+            platform_arch=${base%.exe}; platform_arch=${platform_arch%.tar.gz}; platform_arch=${platform_arch#*_*_}
+            case "$keep" in
+              *" $platform_arch "*)
+                echo "publish: $base"
+                ;;
+              *)
+                echo "drop:    $base（$platform_arch 不在发布白名单：macOS 两档未构建验证 / 两个 arm64 槽位待真机跑一帧；仍留在 dist-<slot> artifact 里取证）"
+                rm -f "$f"
+                ;;
+            esac
+          done
+
+      - name: 重算全量 SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l dist
+          # 齐全性（名单内每个槽位 GUI 与 CLI 都要在）**已由上上步的「发布名单守卫」断言**，且那一步看的是裁剪前的
+          # 全量集 —— 同一套规则只留一份实现，免得两处判据漂开。这里只负责重算摘要：各槽位各写一份 SHA256SUMS.txt，
+          # 合并后只有一份是真的，故在 Release 侧按已发布的资产重算。
+          cd dist
+          rm -f SHA256SUMS.txt
+          sha256sum unlucky-launcher_* ull_* > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: 生成更新清单 manifest.json（D50：固定名挂 Release 资产）
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          RELEASE_BASE: ${{ github.server_url }}/${{ github.repository }}/releases/download
+        run: |
+          set -euo pipefail
+          # 先自验再产文件：golden 对拍 + 「DTO 严格解析」镜像（未知字段 / 摘要长度 / size=0 / 版本重复
+          # 这些在发布步当场炸，而不是变成用户机器上的「查不到更新」）。零第三方依赖，毫秒级。
+          python3 packaging/make_manifest.py --self-test
+          # 事实来源是上一步**重算**出来的 dist/SHA256SUMS.txt：清单不另算一份摘要，两者不可能不一致。
+          # url 钉死 tag（不是 latest）：清单里每条都指向与它自报版本相符的字节。
+          # min_supported / notes 刻意先不写：前者是「收回老版本支持」的发布策略（未拍板，写错会强制升级），
+          # 后者在 Release 正文里已有，两处各写一份迟早漂。
+          python3 packaging/make_manifest.py \
+            --dist dist \
+            --version "$TAG" \
+            --channel stable \
+            --asset-base-url "$RELEASE_BASE/$TAG" \
+            --released-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      # （M190）清单签名：**签不上就不发版**。私钥只从仓库 Secret `ULL_MANIFEST_SIGNING_KEY` 进环境变量，
+      # 本步 `set +x` 且只回显**公钥**（日志里永远不出现私钥）。四条命令任一非零 ⇒ 本步红 ⇒ 不出 Release：
+      #   ① `--self-test`：RFC 8032 向量（签名脚本自己没坏）
+      #   ② `--check-pinned-keyring`：Secret 里的钥**必须**已在 `crates/core/src/update/trust.rs` 钉住
+      #      （签出一份客户端不认的清单，比不发版更糟）
+      #   ③ `--sign`：签的就是上一步落盘的 `dist/manifest.json` 原始字节，产出 `dist/manifest.json.sig`
+      # 红了的处置见 `packaging/docs/signing.md` §4 那张表（缺什么、怎么补，都写在脚本的 stderr 里）。
+      - name: 签更新清单（Ed25519；签不上就阻断发布）
+        shell: bash
+        env:
+          ULL_MANIFEST_SIGNING_KEY: ${{ secrets.ULL_MANIFEST_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          set +x
+          PY=$(command -v python3 || command -v python)
+          if [ -z "$PY" ]; then echo "::error::找不到 python，签名步骤无法运行（签名门禁不降级）"; exit 1; fi
+          "$PY" packaging/sign_manifest.py --self-test
+          if [ -z "${ULL_MANIFEST_SIGNING_KEY:-}" ]; then
+            echo "::error::仓库 Secret ULL_MANIFEST_SIGNING_KEY 没配（或为空）：没有签名私钥就不发版。"
+            echo "::error::补法见 packaging/docs/signing.md §3：python3 packaging/sign_manifest.py --generate-key，把打印的 JSON 贴进 Secret、把 PinnedKey 那行贴进 crates/core/src/update/trust.rs"
+            exit 1
+          fi
+          "$PY" packaging/sign_manifest.py --check-pinned-keyring
+          "$PY" packaging/sign_manifest.py --sign dist/manifest.json
+          # ④ 产出后**用 trust.rs 里钉住的公钥回验一遍**：复现「客户端会怎么判」，而不是信签名脚本
+          # 自己那句「签好了」。私钥不需要参与，所以这一步跑在同一个环境里也不多一个泄露面。
+          "$PY" packaging/sign_manifest.py --verify-pinned dist/manifest.json
+          ls -l dist/manifest.json dist/manifest.json.sig
+
+      - name: 生成 Release 说明（支持矩阵模板）
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib
+          version = os.environ["TAG"].lstrip("v")
+          template = pathlib.Path("packaging/release-notes.md").read_text(encoding="utf-8")
+          sums = pathlib.Path("dist/SHA256SUMS.txt").read_text(encoding="utf-8").strip()
+          body = template.replace("{{VERSION}}", version).replace("{{SUMS}}", sums)
+          pathlib.Path("release-body.md").write_text(body, encoding="utf-8", newline="\n")
+          print(body[:400])
+          PY
+
+      - name: 创建或更新 GitHub Release（同 tag 重跑幂等）
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ github.event.inputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_flags=(--title "Unlucky Launcher $TAG" --notes-file release-body.md)
+          # ── 预发布标记：判据只在 packaging/release_marker.py（M163），本文件不写 case ──
+          # 三种触发各自创建什么（那张表是唯一真相源）：
+          #   push tag（PRERELEASE 为空）  → create 不带标记（**稳定版**）、edit 不碰标记
+          #   dispatch prerelease=true     → create / edit 都带预发布标记
+          #   dispatch prerelease=false    → create 不带标记、edit 显式摘掉预发布标记
+          # 空值必须是稳定版：GitHub 的 releases/latest 只指向**非 prerelease** 的最新 Release，而
+          # 自更新清单固定取 `releases/latest/download/manifest.json`（D50）—— push tag 打成预发布，
+          # 更新通道就是 404（v0.2.2 至今如此，M163 修的就是这条；v0.2.2 那个 Release 保留为历史预发布）。
+          # 先落文件再 source，不用 `source <(...)`：非法的 prerelease 取值要让这一步当场红，
+          # 进程替换里的失败会被 `set -e` 吞掉。
+          marks=/tmp/release-marks.sh
+          python3 packaging/release_marker.py --emit-bash --prerelease "${PRERELEASE:-}" > "$marks"
+          source "$marks"
+          echo "create_mark=(${create_mark[*]:-}) edit_mark=(${edit_mark[*]:-})"
+          # Windows 单 exe 装不下 LICENSE/NOTICE/README.md，故三份与产物并列挂 Release（条款随包）；`ull` 是独立资产。
+          # manifest.json 是更新清单（D50）：固定文件名，客户端问 `releases/latest/download/manifest.json`。
+          # `manifest.json.sig` 必须与清单一起上传：客户端取清单后取它旁边的签名（`GitHubReleaseSource`
+          # 拼的地址是 `<产物根>/manifest.json.sig`），漏传等于让所有人都验签失败（M190）。
+          assets=(dist/unlucky-launcher_* dist/ull_* dist/manifest.json dist/manifest.json.sig dist/SHA256SUMS.txt LICENSE NOTICE README.md)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # 同 tag 重跑（补丁/重编）：Release 已存在 → 覆盖资产 + 刷新说明，再 `create` 会因已存在而失败。
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" "${base_flags[@]}" "${edit_mark[@]}"
+          else
+            gh release create "$TAG" "${assets[@]}" "${base_flags[@]}" "${create_mark[@]}"
+          fi

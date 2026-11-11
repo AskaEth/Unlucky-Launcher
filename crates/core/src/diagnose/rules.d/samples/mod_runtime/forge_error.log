@@ -1,0 +1,3 @@
+[12:01:05] [main/ERROR]: An exception was thrown, the game will display an error screen and halt.
+java.lang.NullPointerException: Cannot invoke "net.minecraft.world.level.Level.getBlockState()" because "level" is null
+	at com.example.mod.Foo.tick(Foo.java:123)

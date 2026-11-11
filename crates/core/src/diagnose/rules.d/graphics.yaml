@@ -1,0 +1,221 @@
+# 规则库 · 显卡 / 图形（11 条 = HMCL 移植 6 + Vulkan 组 5）
+# 移植自 HMCL CrashReportAnalyzer.Rule 的图形组（analyse/02 §7.3 第 3 组）；
+# Vulkan 组见文件末尾（依据 research/05-mc-vulkan.md §3.4 的 renderpearl 原因码）。
+version: 1
+category: graphics
+rules:
+  - id: graphics.gl_operation_failure
+    severity: warning
+    pattern: '(1282: Invalid operation|Maybe try a lower resolution resourcepack\?)'
+    confidence: 0.7
+    priority: 60
+    cause:
+      key: diagnose.cause.graphics.gl_operation_failure
+      summary: '某个 mod/光影包做了非法的 OpenGL 操作（GL_INVALID_OPERATION）'
+      detail: '换掉最近装的光影/资源包，或把资源包分辨率降下来'
+    fix_action:
+      - kind: change_graphics
+        setting: renderer
+        suggested_value: 'OpenGL 兼容模式'
+        note: '先低分辨率资源包验证'
+    sample: samples/graphics/gl_operation_failure.log
+    source: 'HMCL CrashReportAnalyzer.Rule.GL_OPERATION_FAILURE'
+
+  - id: graphics.opengl_not_supported
+    severity: critical
+    pattern: 'The driver does not appear to support OpenGL'
+    confidence: 0.85
+    priority: 75
+    cause:
+      key: diagnose.cause.graphics.opengl_not_supported
+      summary: '显卡驱动不支持 OpenGL（多半是没装显卡驱动，走了软件渲染）'
+      detail: '装/更新显卡厂商驱动；虚拟机里需要开 3D 加速'
+    fix_action:
+      - kind: change_graphics
+        setting: driver
+        update_driver: true
+    sample: samples/graphics/opengl_not_supported.log
+    source: 'HMCL CrashReportAnalyzer.Rule.OPENGL_NOT_SUPPORTED'
+
+  - id: graphics.graphics_driver
+    severity: critical
+    # HMCL 的跨行贪婪模式（EXCEPTION_ACCESS_VIOLATION … # C  [ig/nvoglv/atio）→ file scope。
+    # 末四段是 SDL 变体：26.3-snapshot-4 起窗口层 GLFW→SDL（lwjgl-glfw 消失、lwjgl-sdl 出现），
+    # 同类故障的原文会变成 SDL_GetError 的文本；旧 GLFW 模式保留（老版本日志仍需要）。
+    scope: file
+    pattern: '(Pixel format not accelerated|GLX: Failed to create context: GLXBadFBConfig|Couldn''t set pixel format|net\.minecraftforge\.fml\.client\.SplashProgress|org\.lwjgl\.LWJGLException|EXCEPTION_ACCESS_VIOLATION(.|\n|\r)+# C {2}\[(ig|atio|nvoglv)|SDL_CreateWindow failed|Couldn''t find matching render driver|No available video device)'
+    confidence: 0.8
+    priority: 78
+    cause:
+      key: diagnose.cause.graphics.graphics_driver
+      summary: '显卡驱动侧创建 OpenGL 上下文失败（像素格式/驱动崩溃）'
+      detail: '更新显卡驱动并重启；老显卡可用软渲染或换 OpenGL 兼容模式'
+    fix_action:
+      - kind: change_graphics
+        setting: driver
+        update_driver: true
+      - kind: change_graphics
+        setting: software_renderer
+        note: '驱动更新无效时用软渲染兜底（性能会掉）'
+    sample: samples/graphics/graphics_driver.log
+    source: 'HMCL CrashReportAnalyzer.Rule.GRAPHICS_DRIVER'
+
+  - id: graphics.macos_display_port
+    severity: critical
+    # 原 GLFW 模式保留。后两段是 SDL 变体（26.3 起窗口层换 SDL，无显示器/远程会话在 SDL 侧
+    # 报 SDL_Init 失败）——**但它必须和 `cocoa` 同时出现才命中**：SDL 在 macOS 上的视频驱动
+    # 就叫 `cocoa`，用它把本规则的 macOS 特异性钉住，免得 Windows/Linux 的 SDL_Init 失败被
+    # 误归因成「macOS 显示器问题」。⚠️ SDL 侧原文未在 26.3 实机验证（预测模式），拿到真实
+    # 日志后按实际文本收紧；宁可漏诊也不要跨平台误归因。
+    pattern: '(java\.lang\.IllegalStateException: GLFW error before init: \[0x10008\]Cocoa: Failed to find service port for display|(?i:cocoa).*SDL_Init.*failed|SDL_Init.*failed.*(?i:cocoa))'
+    confidence: 0.85
+    priority: 78
+    cause:
+      key: diagnose.cause.graphics.macos_display_port
+      summary: 'macOS 上 GLFW 初始化窗口失败（Cocoa 找不到 display service port）'
+      detail: '多见于远程桌面/无显示器会话；换成本机登录或升级 macOS 后再试'
+    fix_action:
+      - kind: change_graphics
+        setting: any
+        note: 'macOS 会话/显示器问题'
+    sample: samples/graphics/macos_display_port.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MACOS_FAILED_TO_FIND_SERVICE_PORT_FOR_DISPLAY'
+
+  - id: graphics.resolution_too_high
+    severity: warning
+    pattern: 'Maybe try a (lower resolution|lowerresolution) (resourcepack|texturepack)\?'
+    confidence: 0.8
+    priority: 65
+    cause:
+      key: diagnose.cause.graphics.resolution_too_high
+      summary: '资源包分辨率过高（游戏直接提示换低分辨率资源包）'
+    fix_action:
+      - kind: change_graphics
+        setting: resolution
+        suggested_value: '低分辨率资源包'
+    sample: samples/graphics/resolution_too_high.log
+    source: 'HMCL CrashReportAnalyzer.Rule.RESOLUTION_TOO_HIGH'
+
+  - id: graphics.rtss_sodium
+    severity: warning
+    pattern: 'RivaTuner Statistics Server \(RTSS\) is not compatible with Sodium'
+    confidence: 0.9
+    priority: 70
+    cause:
+      key: diagnose.cause.graphics.rtss_sodium
+      summary: 'RTSS（微星小飞机/帧数显示）与 Sodium 不兼容'
+      detail: '关掉或卸载 RTSS 的 OSD 覆盖层，或改用 Sodium 兼容的帧数显示'
+    fix_action:
+      - kind: change_graphics
+        setting: overlay
+        suggested_value: '关闭 RTSS 覆盖层'
+    sample: samples/graphics/rtss_sodium.log
+    source: 'HMCL CrashReportAnalyzer.Rule.RTSS_FOREST_SODIUM'
+
+  # ── Vulkan 后端组（MC 26.2+ 的实验性 Vulkan 渲染）────────────────────────────
+  # 证据：research/05-mc-vulkan.md §3.4。renderpearl 的
+  # `BackendCreationException$Reason` 有五个稳定原因码（四个 vulkan_* + opengl_missing），
+  # 它们同时出现在 latest.log 的 `Backend failure reason: <码>` 与崩溃报告的
+  # `Backend failure reason` 行，是最可靠的落点（比英文正文稳，正文会随版本改）。
+  # 注意语义：26.2/26.3 的 Vulkan 首选失败会**自动回落 OpenGL**，所以单条 vulkan_* 命中
+  # 通常不是崩溃主因（warning）；只有五个后端全挂才是 critical（见最后一条）。
+
+  - id: graphics.vulkan_loader_missing
+    severity: warning
+    pattern: '(Vulkan loader library is missing|vulkan_loader_missing)'
+    confidence: 0.85
+    priority: 80
+    cause:
+      key: diagnose.cause.graphics.vulkan_loader_missing
+      summary: '机器上没有 Vulkan loader（Vulkan 后端起不来，游戏已回落 OpenGL）'
+      detail: '装/更新显卡驱动（Windows 需要 vulkan-1.dll，Linux 需要 libvulkan.so.1）；装不上就改用 OpenGL 后端'
+    fix_action:
+      - kind: change_graphics
+        setting: graphics_api
+        suggested_value: 'opengl'
+        note: 'Vulkan loader 缺失时强制 OpenGL，避免每次启动都白试一遍'
+      - kind: change_graphics
+        setting: driver
+        update_driver: true
+    sample: samples/graphics/vulkan_loader_missing.log
+    source: 'research/05-mc-vulkan.md §3.4（renderpearl BackendCreationException.Reason）'
+
+  - id: graphics.vulkan_device_version_too_low
+    severity: warning
+    pattern: '(vulkan_device_version_too_low|Vulkan [0-9]\.[0-9].{0,40}at least [0-9]\.[0-9] required)'
+    confidence: 0.85
+    priority: 78
+    cause:
+      key: diagnose.cause.graphics.vulkan_device_version_too_low
+      summary: '显卡/驱动支持的 Vulkan 版本低于 1.2（Vulkan 后端起不来）'
+      detail: '更新显卡驱动；驱动停更的老卡（10 年以上）没有 Vulkan 1.2，只能继续用 OpenGL'
+    fix_action:
+      - kind: change_graphics
+        setting: graphics_api
+        suggested_value: 'opengl'
+      - kind: change_graphics
+        setting: driver
+        update_driver: true
+    sample: samples/graphics/vulkan_device_version_too_low.log
+    source: 'research/05-mc-vulkan.md §3.4'
+
+  - id: graphics.vulkan_missing_extension
+    severity: warning
+    pattern: '(vulkan_missing_extension|missing: .*VK_KHR_(dynamic_rendering|push_descriptor))'
+    confidence: 0.85
+    priority: 76
+    cause:
+      key: diagnose.cause.graphics.vulkan_missing_extension
+      summary: '驱动缺 Vulkan 必需扩展（VK_KHR_dynamic_rendering / VK_KHR_push_descriptor）'
+      detail: 'MC 26.2+ 的 Vulkan 后端要求 VK 1.2 + dynamic_rendering + push_descriptor，三者缺一就跑不了；Mesa Dozen 也不支持 push_descriptor'
+    fix_action:
+      - kind: change_graphics
+        setting: graphics_api
+        suggested_value: 'opengl'
+      - kind: change_graphics
+        setting: driver
+        update_driver: true
+        note: '只有在驱动有新版本时才可能补上扩展'
+    sample: samples/graphics/vulkan_missing_extension.log
+    source: 'research/05-mc-vulkan.md §3.4 + §4.4（Dozen 反例）'
+
+  - id: graphics.vulkan_missing_feature
+    severity: warning
+    pattern: '(vulkan_missing_feature|missing capabilities: .*VULKAN_CORE_1_2)'
+    confidence: 0.8
+    priority: 74
+    cause:
+      key: diagnose.cause.graphics.vulkan_missing_feature
+      summary: '驱动缺 Vulkan 必需特性集（VULKAN_CORE_1_2）'
+      detail: '同上，属于驱动能力不足；老核显/虚拟机里常见，用 OpenGL 后端即可'
+    fix_action:
+      - kind: change_graphics
+        setting: graphics_api
+        suggested_value: 'opengl'
+    sample: samples/graphics/vulkan_missing_feature.log
+    source: 'research/05-mc-vulkan.md §3.4'
+
+  - id: graphics.no_graphics_backend
+    severity: critical
+    pattern: 'No supported graphics backend was found'
+    confidence: 0.9
+    priority: 82
+    suppress:
+      - graphics.vulkan_loader_missing
+      - graphics.vulkan_device_version_too_low
+      - graphics.vulkan_missing_extension
+      - graphics.vulkan_missing_feature
+    cause:
+      key: diagnose.cause.graphics.no_graphics_backend
+      summary: 'Vulkan 与 OpenGL 两个后端都创建失败（26.2+ 只有这两条路）'
+      detail: '硬件/驱动两侧都不满足：先更新显卡驱动；虚拟机需要开 3D 加速；实在不行只能换机器'
+    fix_action:
+      - kind: change_graphics
+        setting: graphics_api
+        suggested_value: 'opengl'
+        note: '先确认 Vulkan 失败原因再决定是否强推 OpenGL'
+      - kind: change_graphics
+        setting: software_renderer
+        note: '软渲染兜底能起来但基本没法玩，只用于导数据/排查'
+    sample: samples/graphics/no_graphics_backend.log
+    source: 'research/05-mc-vulkan.md §1.5（两个后端全失败才崩）'

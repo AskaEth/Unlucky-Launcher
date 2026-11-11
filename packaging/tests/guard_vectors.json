@@ -1,0 +1,236 @@
+{
+ "baseline": {
+  ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e\n        if: runner.os == 'Windows'\n        run: |\n          cargo test --release -p unlucky-cli --features update-test-source \\\n            --test update_e2e_test --test update_e2e_tamper_test\n",
+  ".github/workflows/release-build.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: cargo build --release\n",
+  ".github/workflows/release-publish.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: echo publish\n",
+  "packaging/make_artifacts.py": "def build():\n    return 'cargo build --release'\n",
+  "packaging/tests/build.sh": "#!/bin/sh\ncargo build --release\n",
+  "Makefile": "build:\n\tcargo build --release\n",
+  "Cargo.toml": "[workspace]\nmembers = []\n",
+  "crates/core/Cargo.toml": "[features]\nupdate-test-source = []\n# 注释里提到它不算违规\n"
+ },
+ "vectors": [
+  {
+   "label": "allowlist：ci.yml 的 update-e2e 一步",
+   "expect": "green",
+   "files": {}
+  },
+  {
+   "label": "allowlist：同一步放进 release-build.yml",
+   "expect": "red",
+   "files": {
+    ".github/workflows/release-build.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e\n        if: runner.os == 'Windows'\n        run: |\n          cargo test --release -p unlucky-cli --features update-test-source \\\n            --test update_e2e_test --test update_e2e_tamper_test\n"
+   }
+  },
+  {
+   "label": "allowlist：步骤名改成 update-e2e-r2",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e-r2\n        if: runner.os == 'Windows'\n        run: |\n          cargo test --release -p unlucky-cli --features update-test-source \\\n            --test update_e2e_test --test update_e2e_tamper_test\n"
+   }
+  },
+  {
+   "label": "allowlist：少了 --test update_e2e_test",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e\n        if: runner.os == 'Windows'\n        run: |\n          cargo test --release -p unlucky-cli --features update-test-source \\\n            --test update_e2e_tamper_test\n"
+   }
+  },
+  {
+   "label": "allowlist：发布工作流里另起一步",
+   "expect": "red",
+   "files": {
+    ".github/workflows/release-publish.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: leak\n      - run: cargo build --release --features update-test-source\n"
+   }
+  },
+  {
+   "label": "allowlist：ci.yml 里另一个具名步骤",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e\n        if: runner.os == 'Windows'\n        run: |\n          cargo test --release -p unlucky-cli --features update-test-source \\\n            --test update_e2e_test --test update_e2e_tamper_test\n      - name: another\n      - run: cargo build --release --features update-test-source\n"
+   }
+  },
+  {
+   "label": "P2-1 ①：末尾追加无名步骤",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e\n        if: runner.os == 'Windows'\n        run: |\n          cargo test --release -p unlucky-cli --features update-test-source \\\n            --test update_e2e_test --test update_e2e_tamper_test\n      - run: cargo build --release --features update-test-source\n"
+   }
+  },
+  {
+   "label": "P2-1 ②：末尾追加无名步骤的整个 job",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e\n        if: runner.os == 'Windows'\n        run: |\n          cargo test --release -p unlucky-cli --features update-test-source \\\n            --test update_e2e_test --test update_e2e_tamper_test\n  release-from-ci:\n    steps:\n      - run: cargo build --release --features update-test-source\n"
+   }
+  },
+  {
+   "label": "P2-1 ③：flow 风格步骤",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e\n        if: runner.os == 'Windows'\n        run: |\n          cargo test --release -p unlucky-cli --features update-test-source \\\n            --test update_e2e_test --test update_e2e_tamper_test\n      - {name: release-build, run: \"cargo build --features update-test-source\"}\n"
+   }
+  },
+  {
+   "label": "P2-1 ④：步骤写在 jobs: 之前（孤儿行）",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "      - run: cargo build --release --features update-test-source\njobs:\n  update-e2e:\n    steps:\n      - run: echo hi\n"
+   }
+  },
+  {
+   "label": "P2-1 ⑤：`run: |` 块里伪造 `name: update-e2e`",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: |\n          echo 'name: update-e2e'\n          cargo build --release --features update-test-source\n"
+   }
+  },
+  {
+   "label": "P2-2 ①：`#` 在引号内、真命令在后面",
+   "expect": "red",
+   "files": {
+    ".github/workflows/release-build.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: echo \"#\"; cargo build --features update-test-source\n"
+   }
+  },
+  {
+   "label": "P2-2 ②：shell 变量拼接（字面量仍在）",
+   "expect": "red",
+   "files": {
+    ".github/workflows/release-build.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: FEAT=\"update-test-source\"; cargo build --features \"$FEAT\"\n"
+   }
+  },
+  {
+   "label": "Cargo ①：default 把 feature 带上",
+   "expect": "red",
+   "files": {
+    "crates/core/Cargo.toml": "[features]\nupdate-test-source = []\n# 注释里提到它不算违规\ndefault = [\"update-test-source\"]\n"
+   }
+  },
+  {
+   "label": "Cargo ②：别的 feature 依赖它",
+   "expect": "red",
+   "files": {
+    "crates/core/Cargo.toml": "[features]\nupdate-test-source = []\n# 注释里提到它不算违规\nrelease = [\"update-test-source\"]\n"
+   }
+  },
+  {
+   "label": "误杀 ①：注释里提到该 feature",
+   "expect": "green",
+   "files": {
+    ".github/workflows/release-build.yml": "jobs:\n  update-e2e:\n    steps:\n      # 这里不许加 update-test-source\n      - run: cargo build --release\n"
+   }
+  },
+  {
+   "label": "误杀 ②：允许的那一步把 `run:` 写在 `name:` 之前（键序无关）",
+   "expect": "green",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: cargo test --release --features update-test-source --test update_e2e_test\n        name: update-e2e\n"
+   }
+  },
+  {
+   "label": "误杀 ③：`cargo hack check --all-targets`（不打开任何 feature）",
+   "expect": "green",
+   "files": {
+    ".github/workflows/release-build.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: cargo hack check --all-targets\n"
+   }
+  },
+  {
+   "label": "误杀 ④：Cargo 多行 feature 声明",
+   "expect": "green",
+   "files": {
+    "crates/core/Cargo.toml": "[features]\nupdate-test-source = [\n    \"unlucky-core/update-test-source\",\n    \"unlucky-cli/update-test-source\",\n]\n"
+   }
+  },
+  {
+   "label": "P2-2：cargo hack --feature-powerset",
+   "expect": "red",
+   "files": {
+    ".github/workflows/release-build.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: cargo hack --feature-powerset build\n"
+   }
+  },
+  {
+   "label": "P2-2：cargo hack --each-feature",
+   "expect": "red",
+   "files": {
+    ".github/workflows/release-build.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: cargo hack --each-feature build\n"
+   }
+  },
+  {
+   "label": "P2-2：cargo hack --all",
+   "expect": "red",
+   "files": {
+    ".github/workflows/release-build.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: cargo hack --all build\n"
+   }
+  },
+  {
+   "label": "P2-2 扫描面：packaging/tests/build.sh",
+   "expect": "red",
+   "files": {
+    "packaging/tests/build.sh": "#!/bin/sh\ncargo build --features update-test-source\n"
+   }
+  },
+  {
+   "label": "P2-2 扫描面：.github/actions/rebuild/action.yml",
+   "expect": "red",
+   "files": {
+    ".github/actions/rebuild/action.yml": "runs:\n  using: composite\n  steps:\n    - run: cargo build --features update-test-source\n      shell: bash\n"
+   }
+  },
+  {
+   "label": "P2-2 扫描面：.github/workflows/nested/extra.yml",
+   "expect": "red",
+   "files": {
+    ".github/workflows/nested/extra.yml": "jobs:\n  update-e2e:\n    steps:\n      - run: cargo build --release --features update-test-source\n"
+   }
+  },
+  {
+   "label": "P2-2 扫描面：Makefile",
+   "expect": "red",
+   "files": {
+    "Makefile": "build:\n\tcargo build --release --features update-test-source\n"
+   }
+  },
+  {
+   "label": "P2-1 ⑥：`name:` 写在更深缩进的 env 子项里",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e\n        if: runner.os == 'Windows'\n        run: |\n          cargo test --release -p unlucky-cli --features update-test-source \\\n            --test update_e2e_test --test update_e2e_tamper_test\n      - run: cargo build --release -p unlucky-cli --features update-test-source\n        env:\n          T: --test update_e2e_test\n          HINT: |\n            - name: update-e2e\n"
+   }
+  },
+  {
+   "label": "P2-1 ⑦：`name:` 写在 `run: |` 块标量里",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e\n        if: runner.os == 'Windows'\n        run: |\n          cargo test --release -p unlucky-cli --features update-test-source \\\n            --test update_e2e_test --test update_e2e_tamper_test\n      - run: |\n          name: update-e2e\n          cargo build --release --features update-test-source --test update_e2e_test\n"
+   }
+  },
+  {
+   "label": "P2-1 ⑧：同一项里两个不同的 `name:`",
+   "expect": "red",
+   "files": {
+    ".github/workflows/ci.yml": "jobs:\n  update-e2e:\n    steps:\n      - name: update-e2e\n        run: cargo build --release --features update-test-source --test update_e2e_test\n        name: release-build\n"
+   }
+  },
+  {
+   "label": "P2-2 ①：.cargo/config.toml 用 `--cfg feature=` 开该 feature",
+   "expect": "red",
+   "files": {
+    ".cargo/config.toml": "[build]\nrustflags = [\"--cfg\", 'feature=\"update-test-source\"']\n"
+   }
+  },
+  {
+   "label": "P2-2 ②：.cargo/config.toml 设 rustc-wrapper",
+   "expect": "red",
+   "files": {
+    ".cargo/config.toml": "[build]\nrustc-wrapper = \"./tools/wrapper\"\n"
+   }
+  },
+  {
+   "label": "误杀 ⑤：普通 .cargo/config.toml（无 feature / 无 wrapper）",
+   "expect": "green",
+   "files": {
+    ".cargo/config.toml": "[build]\njobs = 4\n"
+   }
+  }
+ ]
+}

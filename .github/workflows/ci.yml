@@ -1,0 +1,336 @@
+name: CI
+
+# 主干门禁：fmt / clippy / test / build 双平台矩阵。
+# 架构守门（core 零 UI、文件 ≤400 行、依赖许可）见 guards.yml。
+# 平台基线 Win10+（标准工具链产物），平台矩阵见 AGENTS.md §7。
+#
+# M118（D26）：根 Cargo.toml 已 `exclude = ["crates/app"]`（Slint 退役树，源码原样保留）。
+# 所以本文件里所有 `--workspace` 都**不再**覆盖 `unlucky-app`：CI 不再编 slint 1.18 + usvg 0.48
+# 那棵依赖树（本机单路冷编 ≈14 分钟；并行超配时表现为 `rustc` 退 1 且零诊断，
+# 见 DevDocs/00-踩坑记录-p2.md T7）。历史实现只作源码参考，**没有构建方式**（见 README：
+# 它的 manifest 整份是 workspace 继承写法，离开 workspace 后连解析都过不了）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: fmt (rustfmt --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux 图形栈构建依赖（winit / wgpu 编译期需要）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libwayland-dev libxcb1-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `--workspace` 现在是 8 个 crate，不含 `unlucky-app`（M118 的 workspace exclude），
+      # 所以这条命令不会拉起 slint / usvg / i-slint-*。
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux 图形栈构建依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libwayland-dev libxcb1-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # ---- 下载页选项区的四条像素守门（M127）：先出图，再把路径喂给 `--lib` ----
+      # 之前这四条靠开发者本机手动设 `ULL_DL_*_SHOT`（不设就 SKIP），而本文件里 grep 这些
+      # 变量零命中 ⇒ **CI 里一次都没跑过**。空跑的守门长期等于没有，所以这两步是它们的第一处
+      # 常驻调用点。（另有一道保险：变量缺失且 `CI` 已设置时，守门自己会失败而不是跳过。
+      # 于是将来谁把下面出图那步重构掉，构建会红。）
+      #
+      # **为什么只在 Windows**：断言里有几条直接量墨迹（行高 44、版本号墨迹条数、图标药丸
+      # 40×40），这些数字按本仓字体栈（Segoe UI / Consolas）标定；Linux/macOS runner 上
+      # 这套字体不存在，回退字体的字高与行距一变就是假红。同一条限制也写在
+      # `crates/app-iced/src/pages/download/tests/options_shot/feed.rs` 的模块文档里
+      # （非 Windows 喂了图会当场失败），不靠「碰巧只配了一处」。
+      - name: 出四张像素守门用的图并写进 $GITHUB_ENV（仅 Windows）
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shots="$RUNNER_TEMP/dl-shots"
+          mkdir -p "$shots"
+          render() {  # $1=宽 $2=文件名
+            cargo run -q -p unlucky-app-iced --example pages_demo -- --screen=download \
+              --width="$1" --height=760 --screenshot="$shots/$2" \
+              --screenshot-theme=light --software-renderer
+          }
+          # ready700：**不设** ULL_DL_DEMO（缺省就是 ready，还没选版本）
+          render 700 ready700.png
+          export ULL_DL_DEMO=options-fabric  # 其余三张都是「选中版本 + 选项区展开」
+          render 700 chips700.png
+          render 736 compact736.png
+          render 1180 wide1180.png
+          for shot in ready700 chips700 compact736 wide1180; do
+            test -s "$shots/$shot.png" || { echo "::error::$shot.png 没出图"; exit 1; }
+          done
+          ls -l "$shots"
+          {
+            echo "ULL_DL_READY_SHOT=$shots/ready700.png"
+            echo "ULL_DL_CHIPS_SHOT=$shots/chips700.png"
+            echo "ULL_DL_COMPACT_SHOT=$shots/compact736.png"
+            echo "ULL_DL_OPTIONS_SHOT=$shots/wide1180.png"
+          } >> "$GITHUB_ENV"
+      # 单独跑一遍只为**取证**：日志里那行 `test result: ok. 4 passed` 是「守门真跑了」的
+      # 直接证据（紧接着的 `--workspace` 那步会再跑一遍，热的，代价可忽略）。
+      - name: 四条像素守门（已喂图，仅 Windows）
+        if: runner.os == 'Windows'
+        run: cargo test -p unlucky-app-iced --lib options_shot
+      # 断言红的时候要先看到那张图（否则「像素不对」只有一句话，没有现场）。
+      - name: 上传喂进守门的四张图（失败也传）
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dl-shots
+          path: ${{ runner.temp }}/dl-shots/
+          if-no-files-found: warn
+      # 同 clippy：`--workspace` 不含 `unlucky-app`（M118），Slint 退役树不再被 `--all-targets` 拉起。
+      # 也因此**不要**再写 `--exclude unlucky-app`：它已不是成员，那面旗子只会打一条
+      # `excluded package(s) … not found in workspace` 的警告然后空转（实测 exit 0，不报错）。
+      #
+      # ---- 取证（M147）：下面是同一件事的两个平台版本，不是两条不同的测试 ----
+      # M144 的三条红里两条已在 docker 里定位到行，第三条 `test (windows)` 在 run 里只留下
+      # `Process completed with exit code 1`——而 cargo 自己的失败码是 **101**，所以那个 1 的
+      # 来源不明（包装层洗码 / 进程被杀，两说都未排除）。job log 要登录才能读（匿名 403），
+      # 但**注解匿名可读**（`GET /check-runs/<id>/annotations` → 200，M144 实证）。所以这三件
+      # 事各自对准一种「看不见」：
+      #   1) `--no-fail-fast`：cargo 默认在第一个失败的 target 就停（M144 实测 Linux 只跑了
+      #      7 个 test binary 就退出），后面还有没有第二条失败完全看不到；
+      #   2) 把 `error` / `failures:` / panicked 行升成 `::error::` 注解：拿不到 job log 时，
+      #      注解是匿名侧唯一能取到的失败正文；
+      #   3) 显式打印 cargo 的退出码：把「包装层把码洗成 1」「cargo 真失败（101）」「进程被杀
+      #      只给码、零诊断」三种情形分开——这正是 M144 没定的那一半。
+      - name: cargo test --workspace --all-targets（ubuntu，失败升注解）
+        if: runner.os == 'Linux'
+        run: |
+          log="$RUNNER_TEMP/cargo-test.log"
+          # 默认 shell 带 `-e` + `pipefail`：管道里 cargo 一失败就会在 tee 之后立刻退出，
+          # 下面三行永远跑不到。所以这段先关 `-e`，自己取 `PIPESTATUS[0]`（cargo 的码，
+          # 不是 tee 的码）。
+          set +e
+          cargo test --workspace --all-targets --no-fail-fast 2>&1 | tee "$log"
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "cargo exit=$code"
+          if [ "$code" -ne 0 ]; then
+            # `%` 是 workflow command 的保留字符，要转成 `%25`，否则注解正文会被截断。
+            grep -E '^(error(\[E[0-9]+\])?:|failures:|test result: FAILED|thread .* panicked at| *--> )' "$log" \
+              | head -40 | sed 's/%/%25/g; s/^/::error::/' || true
+          fi
+          exit "$code"
+      - name: cargo test --workspace --all-targets（windows，失败升注解）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          # M171 跨卷守卫：runner 到底有没有第二块可写卷没有核实手段，所以不赌 —— 显式声明豁免。
+          # 豁免是惰性的：真探到第二块卷时它不参与判断（见 install_xdev_cases 的真值表用例）。
+          ULL_XDEV_TEST_WAIVE: "1"
+        run: |
+          # pwsh 没有 PIPESTATUS（那是 bash 语法）：拿 `$LASTEXITCODE` —— Tee-Object 是 cmdlet，
+          # 不会把它改掉，所以它是 cargo 自己的码。
+          $log = Join-Path $env:RUNNER_TEMP 'cargo-test.log'
+          cargo test --workspace --all-targets --no-fail-fast 2>&1 | Tee-Object -FilePath $log
+          $code = $LASTEXITCODE
+          Write-Host "cargo exit=$code"
+          if ($code -ne 0) {
+            # 正则不锚 `error:` 那一支：pwsh 把原生 stderr 折成 ErrorRecord 后行首可能多一截前缀，
+            # 锚死会漏行；`%` 是 workflow command 的保留字符，转成 `%25`。
+            Select-String -Path $log -Pattern '(error(\[E\d+\])?:|^failures:|test result: FAILED|thread .* panicked at|^\s+--> )' |
+              Select-Object -First 40 |
+              ForEach-Object { Write-Host "::error::$($_.Line.Replace('%', '%25'))" }
+          }
+          exit $code
+
+  build:
+    name: build release (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux 图形栈构建依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libwayland-dev libxcb1-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # 同上：`--workspace` 不含 `unlucky-app`（M118）。被摘掉的正是 release 档
+      # （lto=fat + codegen-units=1）最贵的那棵 slint + usvg 树。
+      - run: cargo build --workspace --release
+      # M196：PR 阶段就拦住「产物退回 CUI(3)」。判据是产物 PE 头的 `Subsystem` 字段，不是源码文本——
+      # 这个 bug 的原始形态正是「源码写了、打在另一棵树上」，任何只看 `grep windows_subsystem` 的守卫
+      # 都抓不住它。发布侧同一份脚本再跑一次（`release-build.yml`），两处判据同一个真源。
+      - name: PE 子系统门禁（GUI 产物必须 WINDOWS_GUI/2，CLI 产物必须 CONSOLE/3）
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=$(command -v python3 || command -v python)
+          "$PY" packaging/check_pe_subsystem.py \
+            --gui target/release/unlucky-launcher-iced.exe \
+            --cli target/release/ull.exe
+
+  # 运行时冒烟（M62）：Linux 上**真渲染一帧**，补上「能编译 ≠ 能跑」的空白。
+  # 上面四个 job 都只证明代码编得过、测得过，从不创建真实图形窗口；本 job 在 Xvfb 虚拟显示里
+  # 启动 GUI 进程，让软件渲染器把当前场景渲进内存像素缓冲并编码成 PNG，再对**像素本身**
+  # 断言（不是只看退出码：窗口起来了但一帧空白同样是「退出码 0」）。
+  # 诚实边界：证明「Linux 上真能跑出非空白的一帧」，**不**证明视觉正确——视觉靠人眼看 artifact。
+  # M118（D26）：这里原本绑死 Slint 的 `Window::take_snapshot`，打的是 Slint 版 bin
+  # `unlucky-launcher`；`crates/app` 退出 workspace 后那个 bin 不再存在，改用 iced 版
+  # `unlucky-launcher-iced` 自带的 `--screenshot` 通道（`crates/app-iced/src/shot/`）。
+  # 命令行参数刻意不动：iced 的 `cli.rs` 就是照 Slint 版的口径写的，`--data-dir` 也仍被接受（忽略）。
+  runtime-smoke:
+    name: runtime smoke (ubuntu x64, xvfb)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: 无头 X 与图形栈依赖（xvfb + 软渲染 + 字体）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth \
+            libxkbcommon-dev libxkbcommon-x11-0 libfontconfig1-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libwayland-dev libxcb1-dev \
+            libx11-6 libxcursor1 libxrandr2 libxi6 \
+            fonts-dejavu-core fonts-liberation2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # 用 debug 而不是 release：本 job 验的是「运行时渲染通路能通」，不是优化后二进制的行为；
+      # release 的 lto="fat" + codegen-units=1 会把这一步拖到十几分钟却不带来额外证据。
+      # M118：bin 从 Slint 版 `unlucky-launcher` 换成 iced 版（见上方 job 注释）。
+      - run: cargo build --bin unlucky-launcher-iced --locked
+      - name: 在 Xvfb 里跑一帧并截图（退出码非 0 即失败）
+        run: |
+          set -o pipefail  # 当前没有管道（死行），保留是为将来加管道时先有失败传播
+          mkdir -p "$RUNNER_TEMP/smoke/data"
+          xvfb-run -a --server-args="-screen 0 1280x1024x24" \
+            target/debug/unlucky-launcher-iced --software-renderer \
+            --screenshot "$RUNNER_TEMP/smoke/runtime-smoke.png" \
+            --data-dir "$RUNNER_TEMP/smoke/data"
+      - name: 断言 PNG 存在且非空白（尺寸 / 唯一色数 / 亮度σ / 强边缘占比）
+        run: python3 packaging/check_screenshot.py "$RUNNER_TEMP/smoke/runtime-smoke.png" --json
+      - name: 上传截图与数据目录（失败也传，便于复盘）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-smoke-screenshot
+          path: ${{ runner.temp }}/smoke/
+          if-no-files-found: warn
+
+  # macOS 槽位探针（M62）：**默认不在 PR 上跑**，只有手动 dispatch 才触发。
+  # 之所以是探针而不是常驻槽位：官方 macOS runner 处于 LaunchDaemon 上下文，没有登录的
+  # WindowServer 会话，GUI 的 winit backend 创建窗口大概率直接失败；而 worker 禁 push，
+  # 本机也没有 macOS，这条路径**尚无任何实测证据**——不拿未验证的 job 卡住主干门禁。
+  # 首跑结论决定去留：绿 → 去掉 if/continue-on-error 升为常驻槽位；红 → 按 D26 归入 iced
+  # 重写后再规划，并把错误原文贴进 progress 文档（不静默删 job、不吞失败原因）。
+  # M118：bin 与 Linux 那条一样，从 Slint 版换成 iced 版（`unlucky-launcher-iced`）。
+  runtime-smoke-macos:
+    name: runtime smoke (macos arm64, probe)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    # 探针阶段保留证据但不算流水线结论：log/artifact 里失败原因照常可见，
+    # 解除条件 = 该槽位在真实 runner 上首跑通过并把本行与上面那条 if 一起删掉。
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --bin unlucky-launcher-iced --locked
+      - name: 尝试截图（macOS 没有 X 服务器，直接跑；失败即为结论）
+        run: |
+          set -o pipefail  # 当前没有管道（死行），保留是为将来加管道时先有失败传播
+          mkdir -p "$RUNNER_TEMP/smoke/data"
+          target/debug/unlucky-launcher-iced --software-renderer \
+            --screenshot "$RUNNER_TEMP/smoke/runtime-smoke.png" \
+            --data-dir "$RUNNER_TEMP/smoke/data"
+      - name: 断言 PNG 存在且非空白
+        run: python3 packaging/check_screenshot.py "$RUNNER_TEMP/smoke/runtime-smoke.png" --json
+      - name: 上传截图与数据目录（失败也传，便于复盘）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-smoke-screenshot-macos
+          path: ${{ runner.temp }}/smoke/
+          if-no-files-found: warn
+
+  # M169：更新链路的**端到端验收**（发现新版本 → 下载 → 长度/SHA256 双检 → 就位；篡改摘要 /
+  # 篡改包体 / 截断必须拒绝且不动现有安装；重复 apply 的幂等终态）。
+  #
+  # 独立 job、只在 Windows：夹具的「真形状」只在 Windows 成立——真实产物是裸 `.exe` +
+  # `portable-exe`，而 Linux/macOS 是 `.tar.gz` + `portable-zip`（会被 `ensure_self_replaceable`
+  # 直接拒）。在 ubuntu 上跑绿只能证明「一个世上不存在的 linux portable-exe 能装上」，是假绿
+  # （r1 复审 P2-4）。
+  #
+  # 本 job 的步骤名 `update-e2e` 是**唯一**被允许出现 `update-test-source` 的地方，判据在
+  # `packaging/check_test_source_off.py` 的 `ALLOWED_STEP`：文件名 / 步骤名 / `--test
+  # update_e2e_test` 三者任一不符即红——改这里的 name 或 run 之前先读那段注释。
+  #
+  # 慢是已知的（release + fat LTO，本机实测 7 分钟；不发 debug 档：`debug_assertions`、优化与
+  # panic 行为都不一样，用 debug 跑这条 E2E 就失去了它存在的理由）。tower 明确：能跑起来比跑得快重要。
+  update-e2e:
+    name: update-e2e (windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # 同 test 作业：跨卷 e2e 守卫在没有第二块卷的 runner 上需要显式豁免，否则会判红。
+      ULL_XDEV_TEST_WAIVE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: update-e2e
+        run: >
+          cargo test --release -p unlucky-cli --features update-test-source
+          --test update_e2e_test --test update_e2e_tamper_test

@@ -1,0 +1,142 @@
+# 规则库 · JVM / Java 版本（8 条）
+# 移植自 HMCL CrashReportAnalyzer.Rule（analyse/02 §7.3 第 1 组）。
+# schema 见 ../CONTRACT.md §2：pattern(regex) -> {cause, confidence, fix_action[]}
+version: 1
+category: jvm
+rules:
+  - id: jvm.openj9
+    severity: critical
+    pattern: '(Open J9 is not supported|OpenJ9 is incompatible|\.J9VMInternals\.)'
+    confidence: 0.9
+    priority: 88
+    cause:
+      key: diagnose.cause.jvm.openj9
+      summary: '当前用的是 OpenJ9 虚拟机：Minecraft 与绝大多数 mod 只支持 HotSpot（Oracle/OpenJDK）'
+      detail: '请换成 HotSpot 的 Java 8/17/21（Adoptium、Zulu、Microsoft OpenJDK 的 hotspot 版本都可以）'
+    fix_action:
+      - kind: change_java
+        vendor: hotspot
+        note: 'OpenJ9 不兼容，换 HotSpot'
+    sample: samples/jvm/openj9.log
+    source: 'HMCL CrashReportAnalyzer.Rule.OPENJ9'
+
+  - id: jvm.need_jdk11
+    severity: critical
+    pattern: '(no such method: sun\.misc\.Unsafe\.defineAnonymousClass\(Class,byte\[\],Object\[\]\)Class/invokeVirtual|java\.lang\.UnsupportedClassVersionError: icyllis/modernui/forge/MixinConnector has been compiled by a more recent version of the Java Runtime \(class file version 55\.0\), this version of the Java Runtime only recognizes class file versions up to 52\.0|java\.lang\.IllegalArgumentException: The requested compatibility level JAVA_11 could not be set\. Level is not supported by the active JRE or ASM version)'
+    confidence: 0.92
+    priority: 90
+    cause:
+      key: diagnose.cause.jvm.need_jdk11
+      summary: '模组/加载器需要 Java 11，当前 Java 版本不够'
+      detail: '把实例的 Java 换到 11 或更高（1.17+ 的游戏通常要 17/21）'
+    fix_action:
+      - kind: change_java
+        required_major: 11
+    sample: samples/jvm/need_jdk11.log
+    source: 'HMCL CrashReportAnalyzer.Rule.NEED_JDK11'
+
+  - id: jvm.too_old_java
+    severity: critical
+    pattern: 'java\.lang\.UnsupportedClassVersionError: (.*?) version (?<expected>\d+)\.0'
+    confidence: 0.92
+    priority: 88
+    cause:
+      key: diagnose.cause.jvm.too_old_java
+      summary: 'Java 版本过低：无法加载用 class file version {expected} 编译的类，请换用更高版本的 Java'
+      detail: '这个 class 版本号减去 44 就是所需的 Java 大版本（52→Java 8、61→Java 17）'
+    fix_action:
+      - kind: change_java
+        class_file_version_group: expected
+    sample: samples/jvm/too_old_java.log
+    source: 'HMCL CrashReportAnalyzer.Rule.TOO_OLD_JAVA'
+
+  - id: jvm.32bit
+    severity: critical
+    pattern: '(Could not reserve enough space for (.*?)KB object heap|The specified size exceeds the maximum representable size|Invalid maximum heap size)'
+    scope: line
+    confidence: 0.9
+    priority: 92
+    suppress:
+      - memory.out_of_memory
+    cause:
+      key: diagnose.cause.jvm.32bit
+      summary: '分配堆内存失败：多半是 32 位 Java 或 -Xmx 超过系统可用内存'
+      detail: '32 位 Java 最多只能用约 1.5 GB；换 64 位 Java 或把 -Xmx 降到 2048 MB 以下'
+    fix_action:
+      - kind: adjust_memory
+        need_64bit_java: true
+        min_xmx_mb: 1024
+      - kind: change_java
+        required_major: 17
+        note: '32 位换 64 位'
+    sample: samples/jvm/jvm_32bit.log
+    source: 'HMCL CrashReportAnalyzer.Rule.JVM_32BIT'
+
+  - id: jvm.jdk_9
+    severity: critical
+    pattern: 'java\.lang\.ClassCastException: (java\.base/jdk|class jdk)'
+    confidence: 0.8
+    priority: 80
+    cause:
+      key: diagnose.cause.jvm.jdk_9
+      summary: '游戏只能在 Java 8 上跑（Forge/旧核心库不兼容 Java 9+），当前 Java 版本太高'
+    fix_action:
+      - kind: change_java
+        max_major: 8
+    sample: samples/jvm/jdk_9.log
+    source: 'HMCL CrashReportAnalyzer.Rule.JDK_9'
+
+  - id: jvm.version_too_high
+    severity: critical
+    pattern: '(Unable to make protected final java\.lang\.Class java\.lang\.ClassLoader\.defineClass|java\.lang\.NoSuchFieldException: ucp|Unsupported class file major version|because module java\.base does not export|java\.lang\.ClassNotFoundException: jdk\.nashorn\.api\.scripting\.NashornScriptEngineFactory|java\.lang\.ClassNotFoundException: java\.lang\.invoke\.LambdaMetafactory|Exception in thread "main" java\.lang\.NullPointerException: Cannot read the array length because "urls" is null)'
+    confidence: 0.85
+    priority: 84
+    cause:
+      key: diagnose.cause.jvm.version_too_high
+      summary: 'Java 版本过高：老版本 Forge/核心库用了被新 JDK 移除或封装的接口'
+      detail: '1.16 及更早优先用 Java 8；1.17–1.20.4 用 Java 17；1.20.5+ 用 Java 21'
+    fix_action:
+      - kind: change_java
+        vendor: hotspot
+        note: '降到该游戏版本要求的 Java'
+      - kind: reinstall
+        component: loader
+        note: '或把 Forge/加载器升级到支持新 Java 的版本'
+    sample: samples/jvm/java_version_is_too_high.log
+    source: 'HMCL CrashReportAnalyzer.Rule.JAVA_VERSION_IS_TOO_HIGH'
+
+  - id: jvm.modlauncher_8
+    severity: critical
+    pattern: 'java\.lang\.NoSuchMethodError: (''void sun\.security\.util\.ManifestEntryVerifier\.<init>\(java\.util\.jar\.Manifest\)''|sun\.security\.util\.ManifestEntryVerifier\.<init>\(Ljava/util/jar/Manifest;\)V)'
+    confidence: 0.9
+    priority: 86
+    cause:
+      key: diagnose.cause.jvm.modlauncher_8
+      summary: 'ModLauncher 8 与当前 Java 不兼容（JDK-8273826）：1.16+ Forge 在新 JDK 上会这样崩'
+    fix_action:
+      - kind: change_java
+        max_major: 8
+      - kind: reinstall
+        component: forge
+        note: '或升级 Forge 到新版'
+    sample: samples/jvm/modlauncher_8.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MODLAUNCHER_8'
+
+  - id: jvm.mac_jdk8u261
+    severity: critical
+    pattern: >-
+      Terminating app due to uncaught exception 'NSInternalInconsistencyException', reason: 'NSWindow drag regions should only be invalidated on the Main Thread!'
+    confidence: 0.85
+    priority: 82
+    cause:
+      key: diagnose.cause.jvm.mac_jdk8u261
+      summary: 'macOS 上 JDK 8u261+ 用新 Xcode 编译导致的 Forge/OptiFine 崩溃（sp614x/optifine#4824）'
+      detail: '换 Java 8u252 及更早，或升级 Forge/OptiFine'
+    fix_action:
+      - kind: change_java
+        max_major: 8
+        note: '优先试 8u252'
+      - kind: reinstall
+        component: optifine
+    sample: samples/jvm/mac_jdk8u261.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MAC_JDK_8U261'

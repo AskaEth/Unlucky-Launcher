@@ -1,0 +1,94 @@
+name: Release guard
+
+# 发布标记语义守门（M163）：**push tag 默认创建稳定版**这条不许只靠注释保证。
+#
+# 判据全部在 `packaging/check_release_semantics.py`，它做四件事：
+#   ① 标记表：push tag（空串）的 create **不含** --prerelease；dispatch true ⇒ 预发布；
+#      dispatch false ⇒ create 稳定、edit 显式摘标记；非法取值必须抛。
+#   ② 真 bash 往返：把 `packaging/release_marker.py --emit-bash` 的产物 source 进 bash，
+#      读回 create_mark / edit_mark 两个数组——证明流水线**真跑的那段代码**对，不只是函数对。
+#   ③ release-publish.yml 的可执行内容里没有 --prerelease 字面量：标记只能从那张表来。
+#   ④ release.yml 的 dispatch 默认值 == false（读 YAML 结构，不是 grep 字符串）。
+# 最后一步 `--self-mutation` 是这条守门自己的变异自测：把「默认值改回 true」「塞回字面量」
+# 「表里 push 分支改成预发布」逐项注入临时副本，断言守门**每一项都红**、基线绿。守门自己
+# 抓不住回归时它会先红，所以这条断言不会变成装饰品。
+#
+# 为什么不并进 guards.yml：那份文件已经 398 行（400 行红线），再挂一个 job 必越线。
+# 改 `release.yml` 的 prerelease 输入 / 改那段 `gh release` 时，先跑
+# `python3 packaging/check_release_semantics.py`（本机可用 `python`，脚本会自己找 bash）。
+#
+# （M164）同一个 job 还挂**发布名单守卫** `packaging/check_publish_slots.py`：`PUBLISH_SLOTS` 与槽位表/产物
+# 必须对得上。PR 阶段跑源码级断言（名单非空、每项都是 `release.yml` 槽位表里的 `mode: ci` 档）——
+# 名单里写错一个字此前只会表现为「Release 侧一个也不匹配、齐全性检查红在别处」，根因要翻两层日志；
+# `--self-test` 再注入 11 条回归（缺资产 / 拼错 / 声明了 probe 档 / 名单声明了没产物 / 有产物没声明 /
+# `mode: ci` 却没产物 / 声明的 `linux-x64` 构建红了必须拦住发布 / 提前把 `linux-arm64` 写进名单必须红）证明它会红。
+# 发布侧那道「产物 ⇄ 名单」的运行时断言在 `release-publish.yml`（同一份脚本，`--dist`）。
+#
+# （M169）同一个 job 再挂**测试通道守门** `packaging/check_test_source_off.py`：core/cli/presenter/
+# app-iced 各有一条 `update-test-source` feature，打开后 `core::update::job::default_source` 可以被
+# 两个环境变量指向任意本地目录——而更新链路的终点是**替换用户盘上的 exe**。它默认关，官方发布产物
+# 里不许有它：守门扫 `.github/workflows/**`（含复合 action）、`packaging/**` 递归脚本、
+# `Makefile`/`justfile`/`Taskfile`、各 `Cargo.toml`（`default` 里带上它也红）与 `.cargo/config*.toml`
+# （`--cfg feature="…"` 与 `rustc-wrapper` 都能绕过 `--features`）。**唯一允许**是 `ci.yml` 里名为
+# `update-e2e` 的那一步（且必须带 `--test update_e2e_test`，文件名/步骤名/参数任一不符即红）。
+# `--self-test` 注入 26 条真实回归 + 6 条防误杀/放行用例（另加基线；条数以 `--self-test` 输出为准），
+# 该红的红、该绿的绿。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-semantics:
+    name: 发布标记语义守门（push tag → 稳定版）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 标记表自检（push tag ⇒ 稳定版）
+        run: python3 packaging/release_marker.py --self-test
+      - name: 语义断言（标记表 / bash 往返 / 流水线只用表 / dispatch 默认值）
+        run: python3 packaging/check_release_semantics.py
+      - name: 变异自测（守门抓不抓得住回归）
+        run: python3 packaging/check_release_semantics.py --self-mutation
+      - name: 发布名单守卫自测（声明⇒必须有产物 / 有产物没声明⇒显式警告）
+        run: python3 packaging/check_publish_slots.py --self-test
+      - name: 发布名单与矩阵槽位一致（拼错字 / 声明了 probe 档 当场红）
+        run: python3 packaging/check_publish_slots.py
+      # M169：`update-test-source` 这条 feature 能让更新源指向任意本地目录，而更新链路的终点是
+      # 替换用户盘上的 exe。它**默认关**、官方发布产物里不许有它，这条由脚本自动断言（不再靠注释）：
+      # 扫 `.github/workflows/**`（含复合 action）、`packaging/**` 递归脚本、`Makefile`/`justfile`/
+      # `Taskfile` 与各 `Cargo.toml`；归属按 `jobs.*.steps[]` 的**列表项**判，落不到具名步骤的行一律红。
+      # 唯一允许：本仓 `ci.yml` 里名为 `update-e2e` 的那一步（且必须带 `--test update_e2e_test`）。
+      - name: 测试通道守门自测（注入变异，该红的红、该绿的绿）
+        run: python3 packaging/check_test_source_off.py --self-test
+      - name: 发布产物不含测试通道（workflow / 打包脚本 / Cargo default 都不许开）
+        run: python3 packaging/check_test_source_off.py
+      # M190：签名脚本与 PE 版本资源门禁自己的自检。前者验 RFC 8032 向量（Ed25519 实现错了就发不出
+      # 能被验过的签名），后者把「口径表 ⇄ pe_version.rs」「四段式版本号换算」对拍，并造一个没有版本
+      # 资源的假 PE 断言判据**会红**（否则那道门禁对任何输入都绿，等于没有）。
+      - name: 清单签名脚本自检（RFC 8032 向量 + 信任表标记解析）
+        run: python3 packaging/sign_manifest.py --self-test
+      - name: PE 版本资源判据自检（口径表对拍 + 假 PE 必红）
+        run: python3 packaging/check_pe_version.py --self-test
+      # M190 r1 复审 P1-1：`.github/workflows/release-build.yml` 的 sed 替换串里混进过一枚裸 0x01
+      # （本意是 `\1`）。GitHub 解析这种文件会直接失败 ⇒ **整个 run 起不来**，而所有文本扫描型守卫
+      # 都看不见它（它们把 workflow 读成文本）。这条用**真 YAML 解析器** parse 全部 workflow，
+      # 外加一条「C0 控制字符」字节判据（两种失败模式各自独立报 `::error file=…,line=…`）。
+      # PyYAML 在 GitHub runner 上自带；万一缺失，脚本自己装一次，仍失败则红（门禁不降级）。
+      - name: workflow YAML 自检（注入 0x01 / 坏结构必须红）
+        run: python3 packaging/check_workflows_yaml.py --self-test
+      - name: workflow 全部可被真 YAML 解析器 parse（无裸控制字符）
+        run: python3 packaging/check_workflows_yaml.py
+      # M190 r3：`update-test-key` 是**信任锚的开关**（把公开的测试公钥并进信任表）。它只许由
+      # `crates/presenter` 的 `[dev-dependencies]` 打开；进了发布构建就等于「谁都能签出官方更新」。
+      # 判据：core 的 `Cargo.toml` 只许自己的声明、presenter 只许 `[dev-dependencies]` 段内、
+      # 其余（workflow / packaging 脚本 / 根 Cargo.toml / cargo 配置）出现即红。
+      - name: 测试公钥守门自检（注入 workflow / dependencies / 根 Cargo.toml 三处变异）
+        run: python3 packaging/check_test_key_off.py --self-test
+      - name: 测试公钥不进发布构建（只许 presenter 的 dev-dependencies）
+        run: python3 packaging/check_test_key_off.py

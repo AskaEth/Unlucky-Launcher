@@ -1,0 +1,400 @@
+name: Release / build（可复用）
+
+# Release 流水线的**构建侧**（M145 拆分：`release.yml` 与 `packaging/README.md` 都顶到 400 行红线，下一处改动必越线）。
+# M145 时本文件 = 拆分前 `.github/workflows/release.yml` 的 `build` job **逐字搬家**，改动只有四个矩阵键换成同名入参：
+#   `matrix.slot` → `inputs.slot`、`matrix.os` → `inputs.os`、`matrix.build_dir` → `inputs.build_dir`、
+#   `matrix.rustflags` → `inputs.rustflags`。
+# **M164 改了两步**（只这两步）：① `Windows ARM64 工具链体检` → `工具链取证`（不再 exit 1，判定权交回编译器；
+# 理由见该步上方的长注释）；② `cargo build` 步给 arm64 槽位显式备齐 target / `LIB`+`INCLUDE` / arm64 `link.exe`。
+# **M184 加了一步**：`linux-x64` 的 xvfb 运行时冒烟（真渲一帧 + `[theme]` / `[backend] final` 日志断言 + 像素判定）——
+# 这一档进了 `PUBLISH_SLOTS`，「发出去的包真能跑」从此由 CI 每轮证明；判据只在 `linux-x64` 槽位上跑（arm64 没有
+# 对应的运行时证据，不给它加一条没验证过的门禁）。同一轮把 arm64 的失败收尾注解按槽位分支。
+# 矩阵**仍由调用方** `release.yml` 的 `plan` job 生成并在外层展开（矩阵不能带 `if`，`strategy` 可读 `needs`），
+# 本文件只跑**单个槽位**，不持有槽位表 —— 改槽位只改 `release.yml` 里那一处。
+# `env` 必须在被调方重复声明：**被调工作流不继承调用方的 workflow 级 `env`**（CARGO_TERM_COLOR / RUST_BACKTRACE
+# 都是构建产物的实参：前者只影响日志着色，后者决定 panic 是否打回溯）。
+
+on:
+  workflow_call:
+    inputs:
+      slot:
+        description: "槽位键，同 plan matrix 的 slot（如 windows-x64 / linux-arm64）"
+        type: string
+        required: true
+      os:
+        description: "runner 标签，同 plan matrix 的 os（如 windows-latest / windows-11-arm）"
+        type: string
+        required: true
+      build_dir:
+        description: "产物根，同 plan matrix 的 build_dir（六槽位一律 target/release）"
+        type: string
+        required: true
+      rustflags:
+        description: "RUSTFLAGS，同 plan matrix 的 rustflags（两个 Windows 槽位为 -C target-feature=+crt-static，其余空）"
+        type: string
+        required: false
+        default: ""
+    # （M149）微软登录用的 Azure 公共客户端 id（公共客户端 id 随二进制一起分发，不按高密级处理，但**不进 git
+    # 文件**：真值放仓库 Secret，用户在仓库设置里录入）。`required: false` 是刻意的——调用方没传（本地、
+    # 没有 runner 的镜像站、以及 Secret 尚未录入时）求值为空串，`client_id.rs` 把空白当「没配」，
+    # 于是非官方构建不烘 id，官方构建才烘。**调用方必须显式传**（`secrets: inherit` 或按名传）；
+    # 没传时这里是空，不会报错。
+    secrets:
+      ULL_MSA_CLIENT_ID:
+        description: "Azure 公共客户端 id，烘进发布二进制（构建期 option_env!）；留空 = 不烘"
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# 与拆分前 build job 拿到的凭据范围一致（可复用工作流的权限只取调用方与本文件的**交集**，故两边都声明 read）。
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ inputs.slot }})
+    runs-on: ${{ inputs.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux 图形栈构建依赖（winit / wgpu 编译期需要）
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libfontconfig1-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libwayland-dev libxcb1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # （M141/M142 → **M164 判定权移交**）windows-arm64 跑在**原生** `windows-11-arm` 上。本步**只取证，不判定**：
+      # M141/M142 的版本用 `find` 猜 SDK 的 `um/arm64/kernel32.lib` 在不在，猜缺就 `exit 1` —— 结果 v0.2.1~v0.2.3
+      # 五轮全红在**这一步**、下面 `cargo build` 一次都没跑过（第 7 步永远 skipped），"arm64 修不好"始终是探针给的
+      # 结论、不是编译器给的。而它跟自己打的快照自相矛盾：v0.2.3 的注解原文是
+      #   `[arm64sdk] SDK Lib 版本→um 架构: 10.0.22621.0→um:[arm,arm64,x64,x86,] 10.0.26100.0→um:[arm64,x64,x86,]`
+      # 同一份注解里却报 `kernel32=缺失`（同一个 `find` 模式在本地合成目录树上命中，故这条路本身不可靠）。
+      # M164 把红绿交回编译器与链接器：本步只打印实况（vswhere 组件查询 / 目录里 .lib **计数** / arm64 link.exe
+      # 路径），一条 `::error::` 都不写、永不 `exit 1`；红不红由 `cargo build` 与静态 CRT 导入表门禁决定。
+      # 也不再自动补装：runner 镜像是 Windows 11 Arm64 + Visual Studio 2026（`windows-11-arm` 自 2026-09 切到 VS2026，
+      # VS 在 `C:\Program Files\Microsoft Visual Studio\18\Enterprise`），其镜像清单
+      # （actions/runner-images 的 `images/windows/Windows11-VS2026-Arm64-Readme.md`）里 `VC.Tools.ARM64`、
+      # `Windows11SDK.26100`、`Windows11SDK.22621` 三件都已装好；M142 那次 `setup.exe modify` 反倒返回非 0。
+      # 注解仍每条一行（job 日志下载要 token，check-run 注解不用；多行会被拼成一行截断）。
+      - name: Windows ARM64 工具链取证（只打印实况，红绿交给编译器）
+        if: inputs.slot == 'windows-arm64'
+        shell: bash
+        run: |
+          set +e; set -uo pipefail         # -e 由 runner 命令行注入，只能显式关
+          say() { printf '::%s::[arm64sdk] %s\n' "$1" "$2"; return 0; }
+          shopt -s nullglob                # 计数走 glob 不走 find：find 的管道 + errexit 正是 M141 的死因
+          vswhere="C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+          [ -x "$vswhere" ] || say warning "找不到 vswhere（$vswhere）：下面会是 0 命中，那不代表工具链缺东西"
+          # ① 组件：用 vswhere 自己的 `-requires`（权威查询），不拿「某个文件名存在」当替身。
+          for comp in Microsoft.VisualStudio.Component.VC.Tools.ARM64 \
+                      Microsoft.VisualStudio.Component.Windows11SDK.26100 \
+                      Microsoft.VisualStudio.Component.Windows11SDK.22621; do
+            hit=""
+            [ -x "$vswhere" ] && hit=$("$vswhere" -latest -products '*' -requires "$comp" -property installationPath 2>/dev/null | head -n1 || true)
+            if [ -n "$hit" ]; then say notice "组件 $comp: 已装（$hit）"
+            else say warning "组件 $comp: 未装 / 这台 VS 不认这个 id（继续看下面的实际 .lib 计数）"; fi
+          done
+          # ② 实况计数：`+crt-static` 要 VC 的 `lib/arm64/libcmt.lib`，链接要 SDK 的 `um/arm64/*.lib`。
+          for root in "C:/Program Files/Microsoft Visual Studio" "C:/Program Files (x86)/Microsoft Visual Studio"; do
+            hits=( "$root"/*/*/VC/Tools/MSVC/*/lib/arm64/libcmt.lib )
+            say notice "VC $root → lib/arm64/libcmt.lib ${#hits[@]} 个${hits[0]:+（首个 ${hits[0]}）}"
+          done
+          for root in "C:/Program Files (x86)/Windows Kits/10/Lib" "C:/Program Files/Windows Kits/10/Lib"; do
+            [ -d "$root" ] || { say notice "SDK $root：不存在"; continue; }
+            for ver in "$root"/*/; do
+              libs=( "$ver"um/arm64/*.lib )
+              say notice "SDK $(basename "$ver") → um/arm64/*.lib ${#libs[@]} 个"
+            done
+          done
+          # ③ arm64 链接器候选：宿主 arm64 的优先（原生），x64 托管的次之。下面 cargo 步会显式导出它。
+          for p in 'VC/Tools/MSVC/*/bin/Hostarm64/arm64/link.exe' 'VC/Tools/MSVC/*/bin/Hostx64/arm64/link.exe'; do
+            hit=""
+            [ -x "$vswhere" ] && hit=$("$vswhere" -latest -products '*' -find "$p" 2>/dev/null | head -n1 || true)
+            say notice "link.exe 候选 $p → ${hit:-未命中}"
+          done
+          echo "取证完毕：本步不判红；arm64 的结论只看下面的 cargo build / 链接 / 导入表门禁"
+
+      # M118（D26）：**Slint 版停发** —— GUI 只有 `unlucky-launcher-iced`（`crates/app` 已 exclude，不进 workspace）。
+      # 产物名由 make_artifacts.py 的 `asset_stem()` 生成 `<名字>_<版本号>_<平台>_<架构>`；不传 `--target`（M140 起全原生）。
+      # （M149）`ULL_MSA_CLIENT_ID` 经 `option_env!` 烘进二进制（`crates/core/src/auth/microsoft/client_id.rs`）：
+      # 官方产物自带微软登录所需的配置，装完即可登录；运行期同名环境变量仍优先于它，可覆盖。
+      # 值来自仓库 Secret（不进 git 文件）；Secret 没配时这里是空串，client_id.rs 把空白当「没配」，
+      # 于是非官方构建不烘 id。想自己烘一份就从源码构建：`ULL_MSA_CLIENT_ID=<id> cargo build`。
+      # （M164）arm64 槽位在编译前把工具链**显式**备齐，不再依赖「runner 反正自带」这种默契：
+      #   ① `rustup target add aarch64-pc-windows-msvc`：宿主机本来就是 aarch64-pc-windows-msvc，这句在原生
+      #      runner 上是幂等 no-op；它把「缺 std」这类失败挡在编译前（缺 target 时 rustc 只会说找不到 crate std）；
+      #   ② MSVC 的 `LIB` / `INCLUDE` 用微软自己的 `vcvarsall.bat arm64` 取（**不手搓路径**：少一个目录就是
+      #      LNK1181），本步 `export` 一次、同时写进 `$GITHUB_ENV` 供下游 dumpbin / 打包步；
+      #   ③ arm64 的 `link.exe` 用 vswhere 定位后显式导出 `CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER`
+      #      （Hostarm64 原生优先、Hostx64 次之）。**②必须先于③**：只覆盖链接器而不给 LIB，rustc 会在
+      #      `link.exe` 里撞 `LNK1181: cannot open input file 'kernel32.lib'`——那正是我们要定位的错误，不是要制造的错误。
+      #   ①②③ 全是「定位不到就打印原因继续」，不用启发式决定红绿：真缺工具链时让链接器自己报出来。
+      - name: cargo build --release --locked
+        shell: bash
+        env:
+          RUSTFLAGS: ${{ inputs.rustflags }}
+          ULL_MSA_CLIENT_ID: ${{ secrets.ULL_MSA_CLIENT_ID }}
+          SLOT: ${{ inputs.slot }}
+          BUILD_DIR: ${{ inputs.build_dir }}
+        run: |
+          set -euo pipefail
+          echo "host=$(rustc -vV | sed -n 's/^host: //p') slot=$SLOT build_dir=$BUILD_DIR"
+          if [ "$SLOT" = "windows-arm64" ]; then
+            rustup target add aarch64-pc-windows-msvc
+            rustup target list --installed
+            vswhere="C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+            if [ -x "$vswhere" ]; then
+              # ② MSVC 的 LIB/INCLUDE。**别把 vcvarsall 的路径直接塞给 `cmd //c "..."`**：MSYS 会把参数里的
+              # `"` 改写成 `\"` 再交给 cmd.exe，而 cmd 的 /c 引号剥离接不住这一层，只会报
+              # `'\"C:\...\vcvarsall.bat\"' 不是内部或外部命令` —— 结果 LIB/INCLUDE 全空、只剩 `set` 的空输出
+              # （M164 复审实测）。故本步改为往 `$RUNNER_TEMP` 写一个 **CRLF** 的 wrapper .bat，引号留在
+              # .bat 自己的 `call "..."` 里（由 cmd 解析，路径带空格也没事），`cmd //c` 只收**不含引号**的
+              # 相对文件名（先 cd 进去），彻底绕开 MSYS 的引号改写。
+              tmp=${RUNNER_TEMP:-${TEMP:-/tmp}}
+              mkdir -p "$tmp"
+              vcvars=""
+              # `-find` 是**单值**参数且官方文档给的是反斜杠形态：两种形态各试一次（与下面 dumpbin 步同规矩），
+              # 只赌一种就等于再写一个「静默退化成 warning」。
+              for pat in 'VC\Auxiliary\Build\vcvarsall.bat' 'VC/Auxiliary/Build/vcvarsall.bat'; do
+                vcvars=$("$vswhere" -latest -products '*' -find "$pat" 2>/dev/null | head -n1 || true)
+                [ -n "$vcvars" ] && break
+              done
+              dump=""
+              if [ -n "$vcvars" ]; then
+                # CRLF 是必须的：cmd 解析只有 LF 的 .bat 会漏行/报错。
+                { printf '@echo off\r\n'
+                  printf 'call "%s" arm64 >nul 2>&1\r\n' "${vcvars//\//\\}"
+                  printf 'set\r\n'; } > "$tmp/ull-msvc-arm64.bat"
+                dump=$(cd "$tmp" && cmd //c ull-msvc-arm64.bat 2>/dev/null | tr -d '\r') || dump=""
+                echo "wrapper: $tmp/ull-msvc-arm64.bat ← $vcvars（set 输出 ${#dump} 字符）"
+              fi
+              for key in LIB INCLUDE; do
+                value=$(printf '%s\n' "$dump" | sed -n "s/^${key}=//p" | head -n1)
+                if [ -n "$value" ]; then
+                  export "$key=$value"
+                  printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
+                  echo "env $key=${value:0:90}…（${#value} 字符）"
+                else
+                  echo "::warning::[arm64] 没拿到 $key（vcvarsall=${vcvars:-未定位}）：留空交给 rustc 自己探测 VS"
+                fi
+              done
+              found=""
+              for p in 'VC\Tools\MSVC\*\bin\Hostarm64\arm64\link.exe' 'VC/Tools/MSVC/*/bin/Hostarm64/arm64/link.exe' \
+                       'VC\Tools\MSVC\*\bin\Hostx64\arm64\link.exe' 'VC/Tools/MSVC/*/bin/Hostx64/arm64/link.exe'; do
+                [ -n "$found" ] && break
+                hit=$("$vswhere" -latest -products '*' -find "$p" 2>/dev/null | head -n1 || true)
+                [ -n "$hit" ] && found=${hit//\\//}
+              done
+              if [ -n "$found" ]; then
+                export CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER="$found"
+                printf 'CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=%s\n' "$found" >> "$GITHUB_ENV"
+                echo "linker: $found"
+              else
+                echo "::warning::[arm64] 没定位到 arm64 link.exe：让 rustc 自己找（真的失败时错误里会带路径）"
+              fi
+            else
+              echo "::warning::[arm64] 没有 vswhere：target 已加，链接器交给 rustc 自己探测"
+            fi
+          fi
+          cargo build --release --locked --bin unlucky-launcher-iced --bin ull
+          # 产物清单只给 windows-arm64 打：两档已发布的 x64（windows-x64 / linux-x64）这一步零变化，不额外给它们
+          # 加失败面（linux-x64 的证据在它自己那条 xvfb 运行时冒烟步里）。
+          if [ "$SLOT" = "windows-arm64" ]; then
+            ls -l "$BUILD_DIR"/unlucky-launcher-iced* "$BUILD_DIR"/ull* || true
+          fi
+
+      # （M190）版本资源门禁：**读产物字节**，不信构建日志。`build.rs` 里写了 `CompanyName` 不等于
+      # 它进了 PE——资源在链接期被丢掉、或被后处理覆盖，都只有读回来才看得见。判据（字段值、四段式
+      # 版本号、FIXEDFILEINFO 的 dwFileVersion）全在 `packaging/check_pe_version.py`，本机可跑。
+      # 只在 Windows 槽位跑：Linux/macOS 产物没有 PE 头，那边 `build.rs` 整段不执行（见
+      # `packaging/pe_version.rs` 文件头）。**工具缺失也 fail**：找不到 python 就等于门禁失效。
+      - name: PE 版本资源读回（CompanyName / ProductName / 版权 / 版本号真的在产物里）
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          BUILD_DIR: ${{ inputs.build_dir }}
+        run: |
+          set -euo pipefail
+          PY=$(command -v python3 || command -v python)
+          if [ -z "$PY" ]; then echo "::error::找不到 python，PE 版本资源门禁无法运行（门禁不降级）"; exit 1; fi
+          # 版本号与 Cargo.toml **同源**：`[workspace.package] version = "x.y.z"`。
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          echo "expect-version=$version"
+          "$PY" packaging/check_pe_version.py             "$BUILD_DIR/unlucky-launcher-iced.exe" "$BUILD_DIR/ull.exe"             --expect-version "$version"
+
+      - name: Windows 单文件自检（导入表不得出现 VC++ 可再发行 DLL）
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          # 校验的是**构建产物**（iced bin 原始名）；对外名 `unlucky-launcher` 由 make_artifacts.py 落盘时才换上。
+          EXE: ${{ inputs.build_dir }}/unlucky-launcher-iced.exe
+        run: |
+          set -euo pipefail
+          # +crt-static 是否真生效只看导入表：出现 VCRUNTIME/MSVCP/msvcr/ucrtbase 就是还得装可再发行包，fail。
+          # dumpbin 定位链（三级，全不命中才 fail —— 门禁不降级）：① vswhere ② find 兜底（两个 VS 根都扫）③ PATH
+          # （排最后是刻意的：最不可控）。dumpbin 在 MSVC 的**宿主**工具目录里：x64 runner 是 `Hostx64/x64`，arm64
+          # runner（M140）是 `Hostarm64/arm64`（反向不行——x64 上挑 Hostarm64 是跑不起来的二进制）。
+          pats=('VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe')
+          if [ "${RUNNER_ARCH:-X64}" = "ARM64" ]; then
+            pats=('VC/Tools/MSVC/*/bin/Hostarm64/arm64/dumpbin.exe' "${pats[@]}")
+          fi
+          VSWHERE="C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+          DUMPBIN=""
+          VIA=""
+          if [ -x "$VSWHERE" ]; then
+            # `-find` 是**单值**参数：一次传多个 pattern 只有一个生效（3.x 取最后一个 —— 老写法里 Hostarm64 因此永远
+            # 轮不到），故每个 pattern 各起一次定位器，不赌它取哪个。反斜杠形态优先（官方文档即此形式），再试正斜杠。
+            for p in "${pats[@]}"; do
+              for pat in "${p//\//\\}" "$p"; do
+                hit=$("$VSWHERE" -latest -products '*' -find "$pat" 2>/dev/null | head -n1 || true)
+                if [ -n "$hit" ]; then DUMPBIN=${hit//\\//}; VIA="vswhere"; break 2; fi
+              done
+            done
+          fi
+          if [ -z "$DUMPBIN" ]; then
+            # VS 根形如 <年>/<版次>（2022/Enterprise、2022/BuildTools……），固定层数的 glob 会踩空，按模式扫。
+            find_pat=()
+            for p in "${pats[@]}"; do find_pat+=(-o -path "*/$p"); done
+            DUMPBIN=$(find "C:/Program Files/Microsoft Visual Studio" \
+                           "C:/Program Files (x86)/Microsoft Visual Studio" \
+                           -maxdepth 11 -type f \( "${find_pat[@]:1}" \) 2>/dev/null | head -n1 || true)
+            if [ -n "$DUMPBIN" ]; then VIA="find"; fi
+          fi
+          if [ -z "$DUMPBIN" ]; then
+            hit=$(command -v dumpbin || true)
+            if [ -n "$hit" ]; then DUMPBIN=$hit; VIA="PATH"; fi
+          fi
+          # 工具缺失同样 fail："找不到就跳过"等于让这道门禁在最需要它的时候静默失效。
+          if [ -z "$DUMPBIN" ]; then echo "::error::找不到 dumpbin，无法校验导入表（静态 CRT 门禁不降级）"; exit 1; fi
+          echo "dumpbin: $DUMPBIN（定位自 $VIA）"
+          ls -l "$EXE"
+          "$DUMPBIN" -nologo -dependents "$EXE" | tee dependents.txt
+          if grep -Eiq 'VCRUNTIME|MSVCP|MSVCR|ucrtbase\.dll' dependents.txt; then
+            echo "::error::静态 CRT 未生效：exe 仍动态依赖 VC++ 可再发行包"; exit 1
+          fi
+
+      - name: PE 子系统门禁（GUI=WINDOWS_GUI/2，CLI=CONSOLE/3；判据与理由见 packaging/README.md §15）
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" packaging/check_pe_subsystem.py --gui "${{ inputs.build_dir }}/unlucky-launcher-iced.exe" --cli "${{ inputs.build_dir }}/ull.exe"
+
+      # （M184）linux-x64 的**运行时门禁**：这一档已进 PUBLISH_SLOTS，所以「发出去的包真能开窗渲出一帧」得由 CI 每轮证明，
+      # 不能只靠一次性的本机验收（证据与实测输出见 `packaging/docs/linux-evidence.md`）。
+      # **只在 linux-x64 槽位上跑**：判据是按 x64 软渲染实测标定的；`linux-arm64` 上这条链一次都没验过（没有 arm64 的
+      # xvfb 证据），写成无条件的 `runner.os == 'Linux'` 就等于给一个没验证过的槽位加一条会红的判据——正是 M171 那个
+      # 「豁免行要单独落」的同类事故。宁可这条只在有证据的槽位上真跑。
+      - name: Linux x64 运行时冒烟（xvfb 真渲一帧 + 主题/后端日志断言）
+        if: inputs.slot == 'linux-x64'
+        shell: bash
+        env:
+          BUILD_DIR: ${{ inputs.build_dir }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth \
+            libxkbcommon-x11-0 libx11-6 libxcursor1 libxrandr2 libxi6 libfontconfig1 fonts-dejavu-core
+          out="$RUNNER_TEMP/linux-smoke"
+          mkdir -p "$out/data"
+          log="$out/launcher.log"
+          # 退出码单独取：`tee` 之后的 `$?` 是 tee 的，管道里 cargo/launcher 的失败会被吞成 0。
+          set +e
+          xvfb-run -a --server-args="-screen 0 1280x1024x24" \
+            "$BUILD_DIR/unlucky-launcher-iced" --software-renderer \
+            --screenshot "$out/linux-x64-first-frame.png" --data-dir "$out/data" 2>&1 | tee "$log"
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "launcher exit=$code"
+          # 两条日志断言（两行都是**恒开**的，不依赖 ULL_ACCEPTANCE）：
+          #   `[theme] source=…flavor=…follows_system=…` 证明主题是按预期来源定的（截图通道默认 Light），
+          #   `[backend] final=… result=started` 证明渲染后端真的起来了（而不是起来前就崩了）。
+          grep -q '^\[theme\] source=' "$log" || { echo "::error::缺少 [theme] 行（主题来源没打印）"; exit 1; }
+          grep -q '^\[backend\] final=.* result=started' "$log" || { echo "::error::缺少 [backend] final=… result=started（渲染后端没起来）"; exit 1; }
+          python3 packaging/check_screenshot.py "$out/linux-x64-first-frame.png" --json
+          ls -l "$out"
+          exit "$code"
+
+      - name: 上传 Linux x64 首帧图（失败也传，人眼复核用）
+        if: always() && inputs.slot == 'linux-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64-first-frame
+          path: ${{ runner.temp }}/linux-smoke/
+          if-no-files-found: warn
+
+      - name: 打包（产物 + SHA256SUMS）
+        shell: bash
+        env:
+          # 不把 `${{ }}` 直接拼进 bash 脚本：git ref 名允许 `$`/反引号/`"`，一律经 env 传入再展开。
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+          SLOT: ${{ inputs.slot }}
+          BUILD_DIR: ${{ inputs.build_dir }}
+        run: |
+          set -euo pipefail
+          # git-bash 与 Linux/macOS runner 的 python 入口名不一致，先探一遍。
+          PY=$(command -v python3 || command -v python)
+          # 槽位与产物根都从矩阵来（M140 起六个槽位都是 target/release），脚本据此定位产物并回读
+          # 可执行文件头校验架构：arm64 槽位现在是**真跑** `ull --version`，「宿主≠产物就跳过」只留给本地交叉。
+          args=(--slot "$SLOT" --build-dir "$BUILD_DIR")
+          if [ "$REF_TYPE" = "tag" ]; then
+            args+=(--version "$TAG")   # 与 Cargo.toml 版本交叉校验
+          fi
+          "$PY" packaging/make_artifacts.py "${args[@]}" --out dist
+          ls -l dist
+
+      - name: 归档内容自检（二进制定位 + 合规文本）
+        shell: bash
+        run: |
+          set -euo pipefail
+          for archive in dist/*.tar.gz; do
+            [ -e "$archive" ] || continue
+            listing=$(tar -tzf "$archive")
+            for required in unlucky-launcher LICENSE NOTICE README.md; do
+              if ! grep -q "/$required$" <<<"$listing"; then
+                echo "::error file=$archive::$archive 缺少 $required"
+                exit 1
+              fi
+            done
+            echo "OK: $archive 含二进制与 LICENSE/NOTICE/README.md"
+          done
+          if ls dist/*.exe >/dev/null 2>&1; then
+            echo "Windows 单 exe 形态：LICENSE/NOTICE/README.md 作为 Release 资产并列分发"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ inputs.slot }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+      # （M142/M164）arm64 若红在别的步骤（cargo / 链接 / 打包 / 导入表门禁），也要有一条注解说清「红在哪」和
+      # 「不挡发布」——只剩一句 `Process completed with exit code 1.` 的教训见上面那条体检步骤。
+      # M164 起本槽位的红**只可能来自真实构建链路**（体检已降级为取证、永不 exit 1），所以这条注解同时也是
+      # 「arm64 到底能不能编出来」的答案所在：红了就把上面的编译器/链接器原文当根因，别再回去改体检。
+      # M184：Linux arm64 进来（它现在是 `mode: ci`，tag 推送默认就编），措辞按槽位分支 —— 两个 arm64 都**不在**发布名单里，
+      # 但理由不同：windows-arm64 等「能不能出 PE」的答案，linux-arm64 等「真机跑不跑得起来」的答案。
+      - name: arm64 失败收尾注解（红不挡发布）
+        if: failure() && (inputs.slot == 'windows-arm64' || inputs.slot == 'linux-arm64')
+        shell: bash
+        env:
+          SLOT: ${{ inputs.slot }}
+        run: |
+          set -euo pipefail
+          if [ "$SLOT" = "linux-arm64" ]; then
+            reason="本槽位只有构建证据、运行时完全未验（没有 ARM64 真机跑过一帧）"
+          else
+            reason="失败步骤见本 job 的步骤名（M164 起只会是 cargo build / 链接 / 导入表门禁 / 打包，体检步不再判红）"
+          fi
+          echo "::error::[$SLOT] 本槽位已红：$reason。PUBLISH_SLOTS 当前是 windows-x64 + linux-x64 ⇒ 本次 Release 仍照发那两档，$SLOT 的产物不进 Release"
