@@ -1,0 +1,48 @@
+// 布局度量令牌（D16 定稿的尺寸口径集中在此）：
+// 导航栏折叠宽度、AI 栏宽度、标题栏高度、磁贴三档尺寸与列数。
+import { TileSize } from "../models.slint";
+
+export global Metrics {
+    // 间距刻度（4 的倍数，Metro 栅格）
+    out property <length> gap-1: 4px;
+    out property <length> gap-2: 8px;
+    out property <length> gap-3: 12px;
+    out property <length> gap-4: 16px;
+    out property <length> gap-5: 24px;
+    out property <length> gap-6: 32px;
+
+    out property <length> radius-sm: 2px;
+    out property <length> radius-md: 4px;
+    out property <length> radius-lg: 8px;
+
+    // 主窗口骨架
+    out property <length> titlebar-height: 40px;
+    out property <length> titlebar-button-width: 46px;
+    out property <length> accent-line: 2px;
+    out property <length> nav-expanded-width: 88px;
+    out property <length> nav-collapsed-width: 48px;
+    out property <length> ai-panel-width: 320px;
+    out property <length> ai-rail-width: 44px;
+    out property <length> page-header-height: 56px;
+    out property <length> running-strip-height: 32px;
+    out property <length> row-height: 44px;
+    out property <length> control-height: 32px;
+    out property <length> touch-target: 32px;
+
+    // 磁贴三档（Q24-3：默认中磁贴 4 列，设置可调小 6 / 大 3）
+    in-out property <TileSize> tile-size: TileSize.medium;
+    out property <int> tile-columns:
+        tile-size == TileSize.small ? 6
+        : tile-size == TileSize.large ? 3
+        : 4;
+    out property <length> tile-height:
+        tile-size == TileSize.small ? 104px
+        : tile-size == TileSize.large ? 176px
+        : 136px;
+    out property <length> tile-icon-size:
+        tile-size == TileSize.small ? 32px
+        : tile-size == TileSize.large ? 56px
+        : 44px;
+    // 小磁贴只留图标+名字+启动键，藏起徽标与最后游玩时间（空间不足）
+    out property <bool> tile-compact: tile-size == TileSize.small;
+}

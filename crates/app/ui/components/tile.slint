@@ -1,0 +1,198 @@
+// 实例磁贴（G1）：图标 / 名字 / MC 版本徽标 / 加载器徽标 / 最后游玩 / 大启动键 + 设置键。
+// 三档尺寸由 Metrics.tile-* 决定（小磁贴藏徽标与时间，只留名字+启动）；
+// 启动中把底部按钮行替换成「进度环 + 阶段文案 + 停止」。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiTile, RuntimePhase, LoaderKind } from "../models.slint";
+import { UiText, TextRole } from "label.slint";
+import { AppIcon, IconKind } from "icons.slint";
+import { Badge } from "badge.slint";
+import { ProgressRing } from "progress-ring.slint";
+import { GlassBase } from "glass.slint";
+import { MetroButton, ButtonKind } from "../widgets/button.slint";
+
+component TileIcon inherits Rectangle {
+    in property <UiTile> data;
+    in property <length> box-size: 44px;
+
+    width: box-size;
+    height: box-size;
+    border-radius: Metrics.radius-md;
+    background: root.data.hue;
+
+    if root.data.icon.width > 0 : Image {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        source: root.data.icon;
+        image-fit: cover;
+    }
+    if root.data.icon.width <= 0 : UiText {
+        text: root.data.initial;
+        font-size: 18px;
+        font-weight: 600;
+        color: Theme.fg-on-accent;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component InstanceTile inherits Rectangle {
+    in property <UiTile> data;
+    in property <bool> compact: false;
+    callback open();
+    callback launch();
+    callback configure();
+    /// 启动中/运行中的停止键（dispatch StopInstance）
+    callback stop();
+
+    height: Metrics.tile-height;
+    background: touch.has-hover ? Theme.bg-elevated : Theme.bg-surface;
+    border-radius: Metrics.radius-md;
+    border-width: 1px;
+    border-color: root.data.phase == RuntimePhase.running ? Theme.accent : Theme.stroke;
+    drop-shadow-blur: touch.has-hover ? 12px : 0px;
+    drop-shadow-color: Theme.shadow;
+    drop-shadow-offset-y: 2px;
+    animate background { duration: Theme.motion-fast; }
+    animate drop-shadow-blur { duration: Theme.motion-normal; }
+
+    // 玻璃拟态底（关闭态什么都不画，卡片就是 Metro 纯色）；必须排在最前，否则盖住 accent 细线
+    GlassBase {
+        card-radius: root.border-radius;
+    }
+
+    // 运行中：顶部 accent 细线（Metro 色块语义）
+    Rectangle {
+        visible: root.data.phase == RuntimePhase.running;
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: 2px;
+        background: Theme.accent;
+    }
+
+    // 磁贴主体点击 → 实例详情（G4）；按钮的 TouchArea 后声明，命中优先
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.open(); }
+    }
+
+    VerticalLayout {
+        padding: Metrics.gap-3;
+        spacing: Metrics.gap-2;
+
+        HorizontalLayout {
+            spacing: Metrics.gap-2;
+
+            TileIcon {
+                data: root.data;
+                box-size: Metrics.tile-icon-size;
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                vertical-stretch: 1;
+
+                UiText {
+                    role: TextRole.bodyStrong;
+                    text: root.data.name;
+                    horizontal-stretch: 1;
+                }
+
+                UiText {
+                    role: TextRole.caption;
+                    text: root.data.last_played;
+                    visible: !root.compact;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            visible: !root.compact;
+            spacing: Metrics.gap-1;
+
+            Badge {
+                text: root.data.mc_version;
+                tint: Theme.fg-secondary;
+            }
+            Badge {
+                text: root.data.loader_label;
+                tint: root.data.loader == LoaderKind.vanilla ? Theme.fg-secondary : Theme.accent;
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; background: transparent; }
+
+        // 空闲/失败：大启动键 + 设置键
+        HorizontalLayout {
+            visible: root.data.phase == RuntimePhase.idle || root.data.phase == RuntimePhase.failed;
+            spacing: Metrics.gap-2;
+
+            MetroButton {
+                kind: ButtonKind.accent;
+                text: root.data.phase == RuntimePhase.failed ? "重试" : "启动";
+                show-icon: true;
+                icon: IconKind.play;
+                grow: true;
+                clicked => { root.launch(); }
+            }
+            MetroButton {
+                kind: ButtonKind.subtle;
+                icon: IconKind.settings;
+                icon-only: true;
+                clicked => { root.configure(); }
+            }
+        }
+
+        // 启动中：进度环 + 阶段文案 + 停止
+        HorizontalLayout {
+            visible: root.data.phase == RuntimePhase.downloading
+                || root.data.phase == RuntimePhase.verifying
+                || root.data.phase == RuntimePhase.launching;
+            spacing: Metrics.gap-2;
+
+            ProgressRing {
+                progress: root.data.progress;
+                ring-size: 22px;
+            }
+            UiText {
+                role: TextRole.caption;
+                text: root.data.phase_label;
+                horizontal-stretch: 1;
+            }
+            MetroButton {
+                kind: ButtonKind.subtle;
+                icon: IconKind.stop;
+                icon-only: true;
+                clicked => { root.stop(); }
+            }
+        }
+
+        // 运行中：状态点 + 停止
+        HorizontalLayout {
+            visible: root.data.phase == RuntimePhase.running;
+            spacing: Metrics.gap-2;
+
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.state-success;
+            }
+            UiText {
+                role: TextRole.caption;
+                text: "运行中";
+                color: Theme.state-success;
+                horizontal-stretch: 1;
+            }
+            MetroButton {
+                kind: ButtonKind.subtle;
+                icon: IconKind.stop;
+                icon-only: true;
+                clicked => { root.stop(); }
+            }
+        }
+    }
+}

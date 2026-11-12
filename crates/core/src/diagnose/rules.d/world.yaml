@@ -1,0 +1,39 @@
+# 规则库 · 游戏实体/方块（2 条）
+# 移植自 HMCL CrashReportAnalyzer.Rule 的实体/方块组（analyse/02 §7.3 第 9 组）：
+# 崩在 tick 时能拿到实体类型/方块类型与坐标，是「哪个 mod 的实体坏了」的直接线索。
+version: 1
+category: world
+rules:
+  - id: world.entity_tick
+    severity: critical
+    scope: file
+    pattern: "Entity Type: (?<type>.*)[\\w\\W\\n\\r]*?Entity's Exact location: (?<location>.*)"
+    confidence: 0.75
+    priority: 70
+    cause:
+      key: diagnose.cause.world.entity_tick
+      summary: '崩在实体 tick：实体 {type}（坐标 {location}）'
+      detail: '看看这个实体来自哪个 mod（血条/怪物增强/刷怪类 mod 居多），禁用该 mod 或删掉存档里这个实体'
+    fix_action:
+      - kind: remove_mod
+        action: disable
+        note: '按实体类型定位 mod'
+    sample: samples/world/entity_tick.log
+    source: 'HMCL CrashReportAnalyzer.Rule.ENTITY'
+
+  - id: world.block_model
+    severity: warning
+    scope: file
+    pattern: 'Block: (?<type>.*)[\w\W\n\r]*?Block location: (?<location>.*)'
+    confidence: 0.65
+    priority: 65
+    cause:
+      key: diagnose.cause.world.block_model
+      summary: '崩在方块（{type}，坐标 {location}）：多半是方块模型/贴图相关 mod 的问题'
+      detail: '定位该方块所属 mod；资源包也可能导致（先换回原版资源包验证）'
+    fix_action:
+      - kind: remove_mod
+        action: disable
+        note: '按方块类型定位 mod / 先换回原版资源包'
+    sample: samples/world/block_model.log
+    source: 'HMCL CrashReportAnalyzer.Rule.BLOCK'

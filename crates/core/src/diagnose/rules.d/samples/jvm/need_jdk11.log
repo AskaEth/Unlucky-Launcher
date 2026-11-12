@@ -1,0 +1,2 @@
+[12:00:02] [main/ERROR]: Failed to start the game
+java.lang.IllegalArgumentException: The requested compatibility level JAVA_11 could not be set. Level is not supported by the active JRE or ASM version

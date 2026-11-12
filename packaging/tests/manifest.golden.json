@@ -1,0 +1,29 @@
+{
+  "channel": "stable",
+  "releases": [
+    {
+      "version": "9.9.9",
+      "channel": "stable",
+      "released_at": "2026-01-02T03:04:05Z",
+      "notes": "golden 样例（自验用，不是真实发布）",
+      "force": false,
+      "min_supported": "9.0.0",
+      "artifacts": [
+        {
+          "target": "win-x64",
+          "format": "portable-exe",
+          "url": "unlucky-launcher_9.9.9_windows_x64.exe",
+          "size": 12,
+          "sha256": "8ac2dbaad20a7b318a75485359b0302d6d2550093b69296cea39db18d4836ef0"
+        },
+        {
+          "target": "linux-x64",
+          "format": "portable-zip",
+          "url": "unlucky-launcher_9.9.9_linux_x64.tar.gz",
+          "size": 12,
+          "sha256": "dcd549d0571bb74eaee60af5c0bc702714fb0de052094336ab10e1e0c7faea0e"
+        }
+      ]
+    }
+  ]
+}

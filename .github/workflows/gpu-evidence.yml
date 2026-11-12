@@ -1,0 +1,233 @@
+name: GPU evidence
+
+# GPU 截图证据门禁（M253：把 M249 的 `packaging/check_gpu_shot.py` 接进 CI）。
+#
+# **为什么新开一个文件，不并进 guards.yml**：guards.yml 已是 399 行、红线 400（`file-size` 那道门
+# 就扫 `*.yml`），挂一个 job 必越线；`release-build.yml` 正好 400 行、动它得先拆。这与
+# `release-guard.yml` 当初单独成文的理由逐字相同（那份文件头：「那份文件已经 398 行（400 行红线），
+# 再挂一个 job 必越线」）。
+#
+# 口径（塔定，M253 Context 原文）：**CI runner 无 GPU 时必须显式 skip 并写明原因，不得静默 pass**。
+# 落到这份文件的三条硬规矩 —— 它们由 `packaging/tests/gpu_shot_ci_selftest.py` 机器校验
+# （33 条「改绿」变异逐条重放、10 类封闭清单），不是靠这几行注释自律；那份脚本的 docstring 写清它**保证什么、
+# 保证不了什么**（r1 复审实测：上一版 19 条变异漏 11 条，所以这里不敢再写「不可能」）：
+#   ① `selftest` job **无条件**跑 `--self-test`：它证明「尺子合格」，不需要 GPU、也不需要真产物；
+#      同一 job 再用真 CLI 走一遍三个退出码（0 过 / 1 判据不过 / 2 用法错）。
+#   ② 真实产物判据只在 `probe` job 探到**工作区里真有可用产物**时才跑。
+#   ③ **跳过与通过分开写**：跳过的做法是让 `evidence` job 的 `if:` 不成立 —— 它在 Actions 里显示
+#      **灰色 skipped**，不是一个绿色的 ✓；同时 `probe` 在 job summary 里写明缺什么、为什么，
+#      并打 `::warning::` 说明「本次没有判过任何真实产物」。
+#
+# 载体依赖：整个 `gpu-evidence.yml` 被删掉/替换后，**没有任何东西会跑这个自检** —— 守门人住在被守对象自己的文件里（`guards.yml` 已经 399/400 行，塞不进去）。
+# 所以改这道门禁时请连自检一起想：自检只认「上面那张封闭清单」，不宣称「不可能被改成总是绿」。
+#
+# 判据本身（六条 + `--expect-refuse` 三条）与能证/不能证：`packaging/docs/gpu-evidence.md`。
+# 改这份文件先跑 `python3 packaging/tests/gpu_shot_ci_selftest.py`。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      shot_log:
+        description: 'stderr 日志路径（需带 ULL_GPU_LOG=info，例 DevDocs/artifacts/gpu-probe/a1-gpu.stderr.log）；留空则按下面的约定路径判'
+        required: false
+        default: ''
+      shot_png:
+        description: '同一运行的 PNG 路径；负例（expect_refuse=true）可留空'
+        required: false
+        default: ''
+      expect_refuse:
+        description: '按负例口径判（--expect-refuse：要求 via=refuse 且一张图都没出）'
+        type: boolean
+        default: false
+  # 日常线 `dev` 复用**同一份**判据与接线（r1 P2-1）：`dev-guards.yml` 里
+  # `uses: ./.github/workflows/gpu-evidence.yml`。理由与 guards.yml 的 `workflow_call:` 逐字相同：
+  # 判据只能有一份，两份各自演进迟早出现「dev 绿、main 红」的双真相；而 `dev-guards.yml` 文件头
+  # 自己写着「空跑的门禁等于没有」。dev 上 `evidence` 照样显式跳过（无 GPU、无产物），所以 dev 拿到的
+  # 是 `selftest` 那一半：19 条向量 + 三个退出码 + 接线自检，成本就是一次 python 自测。
+  workflow_call:
+
+jobs:
+  selftest:
+    name: GPU 判据自测（不需 GPU；跳过 ≠ 已验证）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 判据实现自测（19 条向量，数据在 packaging/tests/gpu_shot_vectors.json）
+        id: vectors
+        run: python3 packaging/check_gpu_shot.py --self-test
+      # 自测走的是判据**函数**，退出码是 `main()` 的那一行。这里用真 CLI 把三个码都走一遍：
+      # 少了这一步，「退出码永远 0」这种回归在 CI 上照样全绿（门禁自己变成假绿）。
+      - name: 退出码语义（0 过 / 1 判据不过 / 2 用法错）
+        id: exitcodes
+        run: |
+          set -uo pipefail
+          work="$RUNNER_TEMP/gpu-shot-exitcodes"
+          mkdir -p "$work"
+          # 用自测脚手架现造一份能过的一对（同一份 synth_log/synth_png，避免第二套手工拼装）
+          python3 - "$work" <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path[:0] = ["packaging", "packaging/tests"]
+          from gpu_shot_selftest import SELFTEST_SIZE, synth_log, synth_png
+
+          root = Path(sys.argv[1])
+          (root / "pass.stderr.log").write_text(synth_log(size=SELFTEST_SIZE), encoding="utf-8")
+          (root / "pass.png").write_bytes(synth_png("content", SELFTEST_SIZE))
+          (root / "red.stderr.log").write_text(synth_log(renderer="tiny-skia"), encoding="utf-8")
+          PY
+          expect() {  # expect <期望退出码> <说明> <命令...>
+            want="$1"; note="$2"; shift 2
+            set +e
+            "$@" > "$work/out.txt" 2>&1
+            got=$?
+            set -e
+            cat "$work/out.txt"
+            if [ "$got" -ne "$want" ]; then
+              echo "::error::退出码语义不对：$note 期望 $want，实际 $got。判据脚本的 0/1/2 是整条门禁的接口，变了就是门禁变了。"
+              exit 1
+            fi
+            echo "OK: $note → exit=$got"
+          }
+          expect 0 "正例（合成日志 + 合成 PNG，六条判据全过）" \
+            python3 packaging/check_gpu_shot.py "$work/pass.stderr.log" "$work/pass.png"
+          expect 1 "CPU 档日志（renderer=tiny-skia，判据点名判红）" \
+            python3 packaging/check_gpu_shot.py "$work/red.stderr.log" "$work/pass.png"
+          expect 2 "用法错（一个位置参数都没给）" \
+            python3 packaging/check_gpu_shot.py
+      - name: 接线自检（33 条「改绿」变异必须重放为红；覆盖边界见脚本 docstring）
+        id: wiring
+        run: python3 packaging/tests/gpu_shot_ci_selftest.py
+
+  probe:
+    name: GPU 证据 — 探测可用产物与硬件适配器
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.detect.outputs.available }}
+      log: ${{ steps.detect.outputs.log }}
+      png: ${{ steps.detect.outputs.png }}
+      reason: ${{ steps.detect.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 探测样例产物与硬件适配器（只探测、不判定）
+        id: detect
+        env:
+          SHOT_LOG: ${{ github.event.inputs.shot_log }}
+          SHOT_PNG: ${{ github.event.inputs.shot_png }}
+          EXPECT_REFUSE: ${{ github.event.inputs.expect_refuse }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          default_dir=DevDocs/artifacts/gpu-probe
+          default_stem=gpu-shot
+          log_path=""
+          png_path=""
+          available=false
+          reason=""
+
+          if [ -n "${SHOT_LOG:-}" ]; then
+            # ① dispatch 显式点了名：**给了却找不到 = 红**。若「明确说要判、东西不在」能退化成跳过，
+            #    那又是一次假绿 —— 有意为之的输入缺失是错误，不是 skip。
+            if [ ! -f "${SHOT_LOG}" ]; then
+              echo "::error::dispatch 指定了 shot_log=${SHOT_LOG}，但工作区里没这个文件 —— 显式要求判定的输入缺失按红处理（不跳过）"
+              exit 1
+            fi
+            if [ -n "${SHOT_PNG:-}" ] && [ ! -f "${SHOT_PNG}" ]; then
+              echo "::error::dispatch 指定了 shot_png=${SHOT_PNG}，但工作区里没这个文件 —— 同上，按红处理"
+              exit 1
+            fi
+            if [ "${EXPECT_REFUSE:-false}" != "true" ] && [ -z "${SHOT_PNG:-}" ]; then
+              echo "::error::正例（expect_refuse=false）必须给 shot_png；只有负例可以省略 PNG"
+              exit 1
+            fi
+            log_path="${SHOT_LOG}"
+            png_path="${SHOT_PNG:-}"
+            available=true
+            reason="dispatch 显式指定产物（${log_path}）"
+          elif [ -f "${default_dir}/${default_stem}.stderr.log" ] && [ -f "${default_dir}/${default_stem}.png" ]; then
+            # ② 约定路径：一次取证 = 一份干净的 stderr + 同一次运行的那张图
+            #    （`--diff`/拼接会骗过判据，见 gpu-evidence.md §5 第 1/7 条）。
+            log_path="${default_dir}/${default_stem}.stderr.log"
+            png_path="${default_dir}/${default_stem}.png"
+            available=true
+            reason="工作区里有约定产物（${default_dir}/${default_stem}.*）"
+          else
+            # ③ 什么都没有 —— 这是 GitHub 托管 runner 的常态：托管 runner 没有 GPU，
+            #    而样例产物也不在仓库里（`DevDocs/` 被 .gitignore 忽略，图不进仓库）。
+            #    必须显式跳过 + 写明原因，不许静默 pass。
+            if compgen -G '/dev/dri/renderD*' >/dev/null; then
+              adapter='本机有硬件适配器（/dev/dri/renderD*）'
+            elif command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+              adapter='本机有硬件适配器（nvidia-smi -L 有输出）'
+            else
+              adapter='无硬件适配器（/dev/dri 下没有 renderD*，也没有可用的 nvidia-smi）'
+            fi
+            reason="${adapter}，且工作区里没有可用的样例产物（约定路径要求 stderr 日志与同次运行的 PNG 同时存在；DevDocs/ 被 .gitignore 忽略，图不进仓库；event=${EVENT}）"
+          fi
+
+          {
+            echo "available=${available}"
+            echo "log=${log_path}"
+            echo "png=${png_path}"
+            echo "reason=${reason}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "${available}" = "true" ]; then
+            echo "GPU 证据：${reason} —— 交给 evidence job 跑真实产物判据（0 过 / 1 判据不过）"
+          else
+            echo "GPU 证据：${reason}，跳过真实产物判据（判据实现自测已过：那证明「尺子合格」，不证明「这张图是 GPU 出的」）"
+            # warning 而不是 notice：这一趟运行**看起来是绿的**，必须在 UI 上留一条黄条说清它没判过。
+            echo "::warning::GPU 证据：跳过（${reason}）—— 本次运行没有判过任何真实产物，不构成「GPU 证据已验证」"
+          fi
+
+          {
+            echo "## GPU 证据（M253）"
+            echo
+            if [ "${available}" = "true" ]; then
+              echo "- 结论：**跑真实产物判据**（${reason}）"
+              echo "- 产物：${log_path}"
+              if [ -n "${png_path}" ]; then echo "- PNG：${png_path}"; else echo "- PNG：无（负例口径 ${EXPECT_REFUSE:-false}）"; fi
+              echo "- 判定看 \`evidence\` job 的退出码（0 过 / 1 判据不过 / 2 用法错）；这里是「有东西可判」，不是「判过了」。"
+            else
+              echo "- 结论：**⏭ 跳过（未验证）** —— ${reason}"
+              echo "- 「这张图真是 GPU 档出的」这件事，**本次没有判过**；跳过不等于通过。"
+              echo "- 已经验过的是尺子本身：\`--self-test\`（19 条向量）与三个退出码 0/1/2（\`selftest\` job）。"
+              echo "- 想让它变成真判定，只有两条**在这个 CI 运行里真能执行**的路："
+              echo "  ① \`workflow_dispatch\` 填 \`shot_log\` / \`shot_png\`，且两个文件必须**已被 checkout 下来**"
+              echo "     —— checkout 只拿已跟踪文件，所以产物得先提交进被 dispatch 的那个 ref；"
+              echo "  ② 把一对产物提交到 \`${default_dir}/${default_stem}.stderr.log\` + \`${default_dir}/${default_stem}.png\`"
+              echo "     再对那个 ref 跑一次（\`${default_dir}\` 在 .gitignore 里，要用 \`git add -f\`；"
+              echo "     或改放到任一已跟踪目录，用 ① 的输入指过去）。"
+              echo "  就地往 workspace 里拷文件（不提交）在 CI 上做不到：那次运行 checkout 的树里没有 DevDocs/。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  evidence:
+    name: GPU 证据 — 真实产物判据
+    needs: [selftest, probe]
+    # 第 ③ 条规矩就在这一行：没有可用产物 ⇒ 整个 job 不运行，UI 上是灰色 skipped，
+    # 不是一个绿色 ✓。这正是「跳过」与「通过」分开写的地方（r1 复审实核过这条 if 的语义）。
+    if: needs.probe.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 判定（0 过 / 1 判据不过 / 2 用法错；退出码即结论，不许被 || true 吞掉）
+        id: judge
+        env:
+          LOG: ${{ needs.probe.outputs.log }}
+          PNG: ${{ needs.probe.outputs.png }}
+          EXPECT_REFUSE: ${{ github.event.inputs.expect_refuse }}
+        run: |
+          set -uo pipefail
+          echo "GPU 证据：判 ${LOG}"
+          if [ "${EXPECT_REFUSE:-false}" = "true" ]; then
+            if [ -n "${PNG}" ]; then
+              python3 packaging/check_gpu_shot.py "$LOG" --expect-refuse "$PNG"
+            else
+              python3 packaging/check_gpu_shot.py "$LOG" --expect-refuse
+            fi
+          else
+            python3 packaging/check_gpu_shot.py "$LOG" "$PNG"
+          fi

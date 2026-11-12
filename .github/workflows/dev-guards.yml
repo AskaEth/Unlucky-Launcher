@@ -1,0 +1,133 @@
+name: Dev Guards
+
+# 日常线门禁（M133）。
+#
+# 为什么需要这个文件：本仓日常开发线是 `dev`，日常合并**不走 PR**（见 DevDocs/AGENTS.md §8 双仓纪律：
+# Gitea `dev` = 日常线）。而 ci.yml 与 guards.yml 只挂在 `push: branches: [main]` + `pull_request` 上
+# ⇒ fmt / clippy / 文件行数≤400 / 三条零依赖守门在**日常线上一次都没跑过**。第一个可见后果：
+# `packaging/README.md` 涨到 401 行、超全仓红线无人拦，直到文档普查才被发现（M131 才修回 398）。
+# 「门禁存在但日常线上永不运行」= 空跑的门禁，长期等于没有。
+#
+# 口径：**只补「快、且坏了会静默腐化」的那几道**，且不复制守门脚本：
+#   - `guards` 作业直接 `uses: ./.github/workflows/guards.yml` —— 六道守门（core-no-ui /
+#     presenter-no-ui / design-zero-dep / unsafe-scope / file-size / licenses）跑的是与 main 同一份脚本，
+#     dev 与 main 的判据永远同源。main / PR / dispatch 的触发与作业一个字没动。
+#   - `fmt` / `clippy` 在本文件里各写一份：ci.yml 的作业背后挂着 build / test / runtime-smoke 整条矩阵，
+#     整份复用等于把 dev 的成本翻倍；这两条命令与 ci.yml 逐字一致，方便对照与同步。
+#
+# 刻意**不上** dev 的（判断依据见 M133 报告，这里只记结论）：
+#   - 全量 `cargo test`：`clippy --all-targets` 已经把测试**代码**类型检查过一遍（「测试编译不过了」
+#     这类静默腐化会被它抓到），而「断言暂时红了」在施工中间态是常态、不是腐化；test 是 2 个 OS ×
+#     全量编译+运行，留给 main 与发布前的最终门更划算。
+#   - build release / runtime-smoke：它们是「能不能发」的门，dev 每次 push 跑一遍换不到新信息。
+#
+# 成本控制（dev push 很频繁，这是硬要求）：
+#   1. `concurrency` 取消**同一个 ref** 上的旧运行：连推三次只留最后一次，被取消的旧运行基本不计费。
+#   2. clippy 只在「这次推送碰过 Rust 侧文件」时跑：只改文档（*.md / LICENSE / NOTICE / .gitignore）
+#      的推送跳过编译。判据**保守**——非 push、base 不可解析（force-push / 首次推送）、diff 取不到、
+#      出现任何不在白名单里的路径，一律照跑：宁可多跑一次，不许假绿。
+#   刻意**不**用 `on.push.paths` 过滤整个工作流：file-size 正是要在「只改文档」的推送里跑的那道门
+#   （README 401 行就是这么漏的），整条过滤掉等于自废武功。
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: dev-guards-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 六道守门原样来自 guards.yml（那边加了 `workflow_call:` 触发，纯新增）。本文件不重写它们的脚本：
+  # unsafe-scope 的词法器一旦有第二份副本，就会出现「dev 绿、main 红」的双真相。
+  guards:
+    name: 架构与合规守门（同 main 口径）
+    uses: ./.github/workflows/guards.yml
+
+  # GPU 证据门禁（M253 r1 P2-1）：与 main **同一份** workflow，理由同上 —— 判据只能有一份。
+  # dev 上 `evidence` 照样显式跳过（无 GPU、无产物，见该文件的 probe job），所以实际拿到的是
+  # `selftest` 那一半：19 条向量 + 三个退出码 0/1/2 + 接线自检，成本就是一次 python 自测。
+  # 不另加「只跑自测」的开关：那会给这道门禁多开一个「可以合法关掉真判据」的旋钮。
+  gpu-evidence:
+    name: GPU 证据门禁（同 main 口径；无 GPU 只跑自测）
+    uses: ./.github/workflows/gpu-evidence.yml
+
+  fmt:
+    name: fmt (rustfmt --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # 只跑 ubuntu：clippy 的判据是类型层 lint，跨平台差异极少（Windows 专属行为由 main/PR 上的
+  # windows-latest 槽位与 test 里的像素守门兜）；两个 OS 都上会把 dev 的编译成本直接翻倍。
+  clippy:
+    name: clippy (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 要 diff 出「这次推了哪些文件」就得有 base commit；浅 clone 会让下面的判据退化成
+          # 「一律照跑」（保守，但不再省成本），所以这里取全历史。
+          fetch-depth: 0
+      - name: 本次推送是否碰过 Rust 侧文件（只碰文档则跳过编译）
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          run=yes
+          note="照跑：默认（未进入可判定的 push 分支）"
+          if [ "$EVENT" != "push" ]; then
+            note="照跑：非 push 事件（手动 dispatch）没有可信 diff"
+          elif [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            note="照跑：base 为首次推送（before 全 0）"
+          elif ! git rev-parse --verify -q "${BEFORE}^{commit}" >/dev/null 2>&1; then
+            note="照跑：base commit 不可解析（force-push / 历史被改写）"
+          else
+            changed=$(git diff --name-only "$BEFORE" "$SHA" 2>/dev/null || true)
+            if [ -z "$changed" ]; then
+              note="照跑：diff 为空（可能是增量不可得）"
+            else
+              # 白名单判定：只有「全部改动都落在这些非 Rust 路径上」才跳过编译。
+              # 反向写法（黑名单 .rs）更省事，但漏一个路径就等于漏一次编译检查。
+              others=$(printf '%s\n' "$changed" \
+                | grep -vE '\.md$' \
+                | grep -vxE 'LICENSE|NOTICE|\.gitignore' || true)
+              if [ -z "$others" ]; then
+                run=no
+                note="跳过：本次只碰文档类路径 —— $(printf '%s ' $changed)"
+              else
+                note="照跑：本次改动了非文档路径 —— $(printf '%s ' $others)"
+              fi
+            fi
+          fi
+          echo "$note"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - name: Linux 图形栈构建依赖（winit / wgpu 编译期需要）
+        if: steps.scope.outputs.run == 'yes'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libwayland-dev libxcb1-dev
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.scope.outputs.run == 'yes'
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        if: steps.scope.outputs.run == 'yes'
+      # 与 ci.yml 的 clippy 作业逐字一致（`--workspace` 不含已退役的 `unlucky-app`，见 M118）。
+      - name: cargo clippy --workspace --all-targets -D warnings
+        if: steps.scope.outputs.run == 'yes'
+        run: cargo clippy --workspace --all-targets -- -D warnings

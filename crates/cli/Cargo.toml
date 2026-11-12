@@ -1,0 +1,46 @@
+[package]
+name = "unlucky-cli"
+description = "Unlucky-Launcher 命令行（bin `ull`）：headless 消费者，零 UI 框架依赖（D18）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 产物名钉死 `ull`（D18 定案）：单文件 CLI，与 GUI 的 `unlucky-launcher` 并列。
+[[bin]]
+name = "ull"
+path = "src/main.rs"
+
+[lib]
+name = "unlucky_cli"
+path = "src/lib.rs"
+
+# 依赖纪律（10-cli-design.md §2）：core + agent，**不引 Slint**。
+# 参数解析手写（不引 clap）：子命令集小，没必要为它多引一棵依赖树（Win10+ 单基线，
+# 但 CLI 是 headless/服务器场景的产物，体积与启动开销仍是关注项）。
+[dependencies]
+unlucky-core = { path = "../core", version = "0.2.5" }
+# agent：`redact`（输出脱敏）+ `ull agent serve`（M39 的 MCP server：注册表 → rmcp 双投影，
+# core 侧五个端口在 src/commands/agent/ports/ 装配）。
+unlucky-agent = { path = "../agent", version = "0.2.5" }
+# `ull agent serve` 要长驻跑 rmcp 的 stdio / Streamable HTTP 传输（tokio 运行时）。
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# M169：转发 core 的测试通道（`--features update-test-source` 才编进来，默认关）。
+# `ull update check/apply` 的端到端验收要靠它指向本地目录源。
+update-test-source = ["unlucky-core/update-test-source"]
+
+# M190：把版本资源写进 PE（Windows「属性 → 详细信息」里的发布者/产品/版权/版本）。
+# 只在 windows 目标上真跑（`build.rs` 先看 CARGO_CFG_TARGET_OS，其它平台直接返回），
+# 共享口径在 `packaging/pe_version.rs`（两个 bin 各 include 一次，署名不会漂）。
+[build-dependencies]
+winresource = "0.1"

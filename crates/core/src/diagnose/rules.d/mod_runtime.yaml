@@ -1,0 +1,136 @@
+# 规则库 · mod 运行期崩（8 条）
+# 移植自 HMCL CrashReportAnalyzer.Rule 的运行期组（analyse/02 §7.3 第 7 组）。
+version: 1
+category: mod_runtime
+rules:
+  - id: mod.loading_crashed_forge
+    severity: critical
+    pattern: 'LoaderExceptionModCrash: Caught exception from (?<name>.*?) \((?<id>.*)\)'
+    confidence: 0.9
+    priority: 85
+    cause:
+      key: diagnose.cause.mod.loading_crashed_forge
+      summary: 'Forge 抓到 {name}（{id}）在加载时抛异常'
+      detail: '禁用该 mod 或换它的兼容版本；同一条栈里往往还有具体异常类型'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - '{id}'
+        action: disable
+    sample: samples/mod_runtime/loading_crashed_forge.log
+    source: 'HMCL CrashReportAnalyzer.Rule.LOADING_CRASHED_FORGE'
+
+  - id: mod.loading_crashed_fabric
+    severity: critical
+    pattern: >-
+      Could not execute entrypoint stage '(.*?)' due to errors, provided by '(?<id>.*)'!
+    confidence: 0.9
+    priority: 85
+    cause:
+      key: diagnose.cause.mod.loading_crashed_fabric
+      summary: 'Fabric 在入口点阶段执行 mod {id} 时出错'
+    fix_action:
+    - kind: remove_mod
+      mod_ids:
+        - '{id}'
+      action: disable
+    sample: samples/mod_runtime/loading_crashed_fabric.log
+    source: 'HMCL CrashReportAnalyzer.Rule.LOADING_CRASHED_FABRIC'
+
+  - id: mod.config_failed
+    severity: warning
+    pattern: 'Failed loading config file (?<file>.*?) of type (.*?) for modid (?<id>.*)'
+    confidence: 0.7
+    priority: 60
+    cause:
+      key: diagnose.cause.mod.config_failed
+      summary: 'mod {id} 的配置文件 {file} 解析失败（多半是被手改坏或版本升级后格式变了）'
+      detail: '删掉该配置文件让 mod 重新生成默认值'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - '{id}'
+        action: disable
+        note: '删配置文件 {file} 后重试（不一定要禁用 mod）'
+    sample: samples/mod_runtime/config_failed.log
+    source: 'HMCL CrashReportAnalyzer.Rule.CONFIG'
+
+  - id: mod.mixin_failure
+    severity: critical
+    pattern: '(MixinApplyError|Mixin prepare failed |Mixin apply failed |mixin\.injection\.throwables\.|\.mixins\.json\] FAILED during \))'
+    confidence: 0.7
+    priority: 65
+    cause:
+      key: diagnose.cause.mod.mixin_failure
+      summary: 'Mixin 注入失败：某个 mod 的 mixin 与当前游戏/其他 mod 的代码不匹配'
+      detail: '常见于 mod 与游戏版本不配套；看日志里 mixin 的 target 类名能定位到 mod'
+    fix_action:
+      - kind: remove_mod
+        action: disable
+        note: '按 mixin 配置文件名（xxx.mixins.json）定位 mod'
+    sample: samples/mod_runtime/mixin_failure.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MODMIXIN_FAILURE'
+
+  - id: mod.mixin_apply_failed
+    severity: critical
+    pattern: 'Mixin apply for mod (?<id>.*) failed'
+    confidence: 0.85
+    priority: 82
+    cause:
+      key: diagnose.cause.mod.mixin_apply_failed
+      summary: 'mod {id} 的 mixin 应用失败'
+    fix_action:
+    - kind: remove_mod
+      mod_ids:
+        - '{id}'
+      action: disable
+    sample: samples/mod_runtime/mixin_apply_failed.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MIXIN_APPLY_MOD_FAILED'
+
+  - id: mod.forge_error
+    severity: warning
+    scope: file
+    pattern: 'An exception was thrown, the game will display an error screen and halt\.(?:\r\n|\n|\r)*(?<reason>.*(?:\r\n|\n|\r)*(\s*at .*(?:\r\n|\n|\r))+)'
+    confidence: 0.6
+    priority: 55
+    cause:
+      key: diagnose.cause.mod.forge_error
+      summary: 'Forge 捕获到未处理异常并已弹出错误界面（Forge 自己给了栈）'
+      detail: '栈顶的 at 行指向哪个 mod 的包名，就去禁用/升级那个 mod'
+    fix_action:
+      - kind: seek_help
+        export_diagnostics: true
+    sample: samples/mod_runtime/forge_error.log
+    source: 'HMCL CrashReportAnalyzer.Rule.FORGE_ERROR'
+
+  - id: mod.night_config_fixes
+    severity: warning
+    pattern: 'com\.electronwill\.nightconfig\.core\.io\.ParsingException: Not enough data available'
+    confidence: 0.85
+    priority: 75
+    cause:
+      key: diagnose.cause.mod.night_config_fixes
+      summary: 'night-config 配置文件读坏了（常见于 nightconfigfixes 相关 mod 组合）'
+      detail: '删掉对应 mod 的配置文件，或移除 nightconfigfixes'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - nightconfigfixes
+        action: remove
+    sample: samples/mod_runtime/night_config_fixes.log
+    source: 'HMCL CrashReportAnalyzer.Rule.NIGHT_CONFIG_FIXES'
+
+  - id: mod.install_mixinbootstrap
+    severity: critical
+    pattern: 'java\.lang\.ClassNotFoundException: org\.spongepowered\.asm\.launch\.MixinTweaker'
+    confidence: 0.8
+    priority: 75
+    cause:
+      key: diagnose.cause.mod.install_mixinbootstrap
+      summary: '缺少 MixinBootstrap 前置（Forge 1.12.2 上很多 mod 需要它）'
+    fix_action:
+      - kind: reinstall
+        component: mixin_bootstrap
+        note: '装上 MixinBootstrap 0.8+'
+    sample: samples/mod_runtime/install_mixinbootstrap.log
+    source: 'HMCL CrashReportAnalyzer.Rule.INSTALL_MIXINBOOTSTRAP'

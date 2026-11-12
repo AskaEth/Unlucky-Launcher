@@ -1,0 +1,289 @@
+// G3 日志页（09 §2 P0·G3）：左侧会话列表（✓正常 / ✗崩溃 / ⚠静默失败）+ 右侧日志流 + 崩溃诊断卡片。
+// 诊断卡片 = D8 规则引擎结论（命中规则 + 置信度 + 修复动作 + 跳 AI 栏带上下文）。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiLogSession, UiLogLine, UiDiagnosis, LogOutcome, LogLevel } from "../models.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+import { Badge } from "../components/badge.slint";
+import { MetroButton, ButtonKind } from "../widgets/button.slint";
+import { SearchField } from "../widgets/inputs.slint";
+import { PageState } from "../page_state.slint";
+import { ListView } from "std-widgets.slint";
+
+component SessionRow inherits Rectangle {
+    in property <UiLogSession> data;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 52px;
+    background: root.active ? Theme.accent-soft : (row-touch.has-hover ? Theme.bg-hover : transparent);
+
+    if root.active : Rectangle {
+        x: 0;
+        y: 0;
+        width: 3px;
+        height: root.height;
+        background: Theme.accent;
+    }
+
+    HorizontalLayout {
+        padding-left: Metrics.gap-3;
+        padding-right: Metrics.gap-2;
+        spacing: Metrics.gap-2;
+
+        AppIcon {
+            icon-size: 14px;
+            kind: root.data.outcome == LogOutcome.ok ? IconKind.check
+                : root.data.outcome == LogOutcome.crashed ? IconKind.error
+                : IconKind.warn;
+            tint: root.data.outcome == LogOutcome.ok ? Theme.state-success
+                : root.data.outcome == LogOutcome.crashed ? Theme.state-danger
+                : Theme.state-warn;
+        }
+
+        VerticalLayout {
+            spacing: 0px;
+            vertical-stretch: 1;
+
+            UiText {
+                role: TextRole.body;
+                text: root.data.instance;
+                horizontal-stretch: 1;
+            }
+            UiText {
+                role: TextRole.caption;
+                text: root.data.when;
+                horizontal-stretch: 1;
+            }
+        }
+
+        UiText {
+            role: TextRole.caption;
+            text: root.data.duration;
+            width: 56px;
+            horizontal-alignment: right;
+        }
+    }
+
+    row-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component LogRow inherits Rectangle {
+    in property <UiLogLine> line;
+
+    height: 18px;
+    background: root.line.level == LogLevel.error
+        ? Theme.state-danger-soft
+        : transparent;
+
+    UiText {
+        x: Metrics.gap-2;
+        y: 0;
+        width: root.width - 2 * Metrics.gap-2;
+        height: root.height;
+        role: TextRole.monoSmall;
+        text: root.line.text;
+        color: root.line.level == LogLevel.error ? Theme.state-danger
+            : root.line.level == LogLevel.warn ? Theme.state-warn
+            : root.line.level == LogLevel.debug ? Theme.fg-disabled
+            : Theme.fg-primary;
+    }
+}
+
+export component LogsPage inherits Rectangle {
+    in property <[UiLogSession]> sessions;
+    in property <[UiLogLine]> lines;
+    in property <UiDiagnosis> diagnosis;
+    in property <bool> has-diagnosis: false;
+    in property <bool> live: false;
+    in-out property <string> selected: "";
+    in-out property <string> query: "";
+
+    callback select(string);
+    callback ask-ai(string);
+    callback apply-fix();
+    callback query-changed(string);
+    /// 重新扫会话索引（手动刷新）
+    callback refresh();
+
+    background: Theme.bg-canvas;
+
+    HorizontalLayout {
+        // ── 左侧会话列表 ─────────────────────────────────────────
+        Rectangle {
+            width: 248px;
+            background: Theme.bg-surface;
+
+            VerticalLayout {
+                Rectangle {
+                    height: 44px;
+                    background: transparent;
+
+                    HorizontalLayout {
+                        padding-left: Metrics.gap-3;
+                        padding-right: Metrics.gap-2;
+                        spacing: Metrics.gap-2;
+
+                        UiText {
+                            role: TextRole.bodyStrong;
+                            text: "会话";
+                            horizontal-stretch: 1;
+                        }
+                        if root.live : Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Theme.state-success;
+                        }
+                    }
+                }
+
+                ListView {
+                    vertical-stretch: 1;
+
+                    for s in root.sessions : SessionRow {
+                        data: s;
+                        active: root.selected == s.id;
+                        clicked => { root.select(s.id); }
+                    }
+                }
+            }
+        }
+
+        Rectangle { width: 1px; background: Theme.stroke; }
+
+        // ── 右侧日志流 + 诊断卡片 ────────────────────────────────
+        VerticalLayout {
+            vertical-stretch: 1;
+
+            // 会话头：标题 + 实时标记 + 筛选 + 刷新（第一行），崩溃日志导入（第二行）
+            Rectangle {
+                height: 84px;
+                background: Theme.bg-surface;
+
+                VerticalLayout {
+                    HorizontalLayout {
+                        height: 44px;
+                        padding-left: Metrics.gap-3;
+                        padding-right: Metrics.gap-3;
+                        spacing: Metrics.gap-2;
+
+                        UiText {
+                            role: TextRole.bodyStrong;
+                            text: root.selected == "" ? "未选择会话" : root.selected;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        if root.live : Badge { text: "实时"; tint: Theme.state-success; }
+                        SearchField {
+                            width: 140px;
+                            placeholder: "筛选日志行";
+                            text <=> root.query;
+                            edited(t) => { root.query-changed(t); }
+                        }
+                        MetroButton {
+                            kind: ButtonKind.subtle;
+                            text: "刷新";
+                            button-height: 26px;
+                            clicked => { root.refresh(); }
+                        }
+                    }
+
+                    // 崩溃日志导入分析（hs_err_pid*.log / crash-*.txt / latest.log）
+                    HorizontalLayout {
+                        height: 40px;
+                        padding-left: Metrics.gap-3;
+                        padding-right: Metrics.gap-3;
+                        spacing: Metrics.gap-2;
+                        SearchField {
+                            horizontal-stretch: 1;
+                            placeholder: "崩溃日志路径（如 .minecraft/crash-reports/crash-*.txt）";
+                            text <=> PageState.crash-path;
+                        }
+                        MetroButton {
+                            kind: ButtonKind.standard;
+                            text: "导入分析";
+                            button-height: 26px;
+                            enabled: PageState.crash-path != "";
+                            clicked => { PageState.crash-import(PageState.crash-path); }
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.stroke; }
+
+            // 崩溃诊断卡片（D8）
+            Rectangle {
+                height: root.has-diagnosis ? 76px : 0px;
+                visible: root.has-diagnosis;
+                background: Theme.state-danger-soft;
+
+                HorizontalLayout {
+                    padding: Metrics.gap-3;
+                    spacing: Metrics.gap-3;
+
+                    AppIcon { kind: IconKind.error; icon-size: 20px; tint: Theme.state-danger; }
+
+                    VerticalLayout {
+                        spacing: 2px;
+                        vertical-stretch: 1;
+
+                        HorizontalLayout {
+                            spacing: Metrics.gap-2;
+                            UiText {
+                                role: TextRole.bodyStrong;
+                                text: root.diagnosis.title;
+                                horizontal-stretch: 1;
+                            }
+                            Badge {
+                                text: "置信度 " + root.diagnosis.confidence + "%";
+                                tint: Theme.state-danger;
+                            }
+                        }
+                        UiText {
+                            role: TextRole.caption;
+                            text: root.diagnosis.hint;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: Metrics.gap-1;
+                        alignment: center;
+
+                        if root.diagnosis.has_fix : MetroButton {
+                            kind: ButtonKind.standard;
+                            text: "修复建议";
+                            button-height: 26px;
+                            clicked => { root.apply-fix(); }
+                        }
+                        MetroButton {
+                            kind: ButtonKind.subtle;
+                            text: "让 AI 详解";
+                            button-height: 26px;
+                            clicked => { root.ask-ai(root.selected); }
+                        }
+                    }
+                }
+            }
+
+            // 日志流（行虚拟化）
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg-canvas;
+
+                ListView {
+                    for l in root.lines : LogRow {
+                        line: l;
+                        width: root.width;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,37 @@
+# Reference source repositories (local-only, git-ignored)
+/HMCL/
+/PCL/
+
+# Local development docs
+/DevDocs/
+
+# Local acceptance screenshots (screenshot channel output, never committed)
+/.screens/
+/.tmp-screens/
+
+# Agent workspace (local-only)
+/.tower/
+
+# Build outputs
+build/
+dist/
+out/
+target/
+
+# Python bytecode (packaging/*.py 本地跑过就会生成；提交它会让每次 spawn 都打 WIP 快照)
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+Thumbs.db
+.DS_Store
+
+# 签名私钥：绝不入库（M255 手册产出的本地副本）
+.signing/
+**/signing-secret*.json
+**/ull-signing/

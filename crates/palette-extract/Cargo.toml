@@ -1,0 +1,32 @@
+[package]
+name = "unlucky-palette-extract"
+description = "配色取色的解码适配层（D40 第 2 层）：图片路径/字节 → RGBA 像素 → unlucky-design 的种子"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 分层纪律（D40）：`crates/design` 保持零第三方依赖，**图片解码只能在这里**。
+# 本 crate 的职责边界很窄：解码 + 限尺寸 + 把像素交给 design，不碰 UI、不碰设置、不碰壁纸探测。
+[dependencies]
+unlucky-design = { path = "../design", version = "0.2.5" }
+
+# 只开两个编解码器（MIT OR Apache-2.0，deny.toml 白名单内）：
+# - png：启动器背景图最常见的无损格式，也是截图通道用的格式；
+# - jpeg：Windows 壁纸与用户照片的绝对主力（不引它等于「取色对一半用户不可用」）；
+# - bmp：Windows 壁纸的真会出现（M73 的探测只读注册表/`.theme` 里的路径，**不筛扩展名**），
+#   而 `image` 的 `bmp` 是独立 feature 且**无额外传递依赖**（`bmp = []`），代价≈0。
+# 不开 `default-features`（默认会拖进 rayon + avif/ravif + webp + tiff + gif + exr + qoi
+# 等一整套编码器，体积与审计面都翻倍）；不开 webp/tiff/avif 是因为 M73 拿到的格式只有
+# png/jpg/bmp 三类，等真有人需要再单开一个 feature。
+image = { workspace = true, default-features = false, features = [
+    "png",
+    "jpeg",
+    "bmp",
+] }
+
+[lints]
+workspace = true

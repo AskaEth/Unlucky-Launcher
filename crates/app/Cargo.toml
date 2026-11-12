@@ -1,0 +1,50 @@
+[package]
+name = "unlucky-app"
+description = "Unlucky-Launcher 桌面壳：Slint + Metro 视觉（唯一允许依赖 UI 框架的 crate）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "unlucky-launcher"
+path = "src/main.rs"
+
+[dependencies]
+slint.workspace = true
+# 跨界 DTO 必须可序列化（AGENTS §6 / 01c §5）：事件与快照是 IPC 契约，
+# 序列化能力由 derive 钉住，测试里做 round-trip 断言。
+serde.workspace = true
+# host 层要读 core 设置/事件里的 JSON 值（serde_json 是 workspace 既有依赖）
+serde_json.workspace = true
+
+# M85：UI 框架无关的宿主层（DTO / 状态 reducer / host / 设置桥 / 偏好 / 路由 / 对话框 / 提示 /
+# 向导 / 假后端）。Slint 版与 iced 版共用这一层，所以 `crates/app` 只是它的**消费者**：
+# 本 crate 里剩下的 `crate::` 引用都换成了 `unlucky_presenter::`。
+#
+# presenter 的零 UI 依赖守门（原文与实测输出就在这里，放不进 present 的自家文档——自指）：
+#   grep -rn slint crates/presenter                 # 期望：无输出
+#   cargo tree -p unlucky-presenter --edges normal   # 期望：只有 serde/serde_json/unlucky-core
+unlucky-presenter = { path = "../presenter", version = "0.2" }
+
+# 边界（01c §5 / D3）：app 只经 DTO 消费 core/agent，**不 import 内部类型**。
+# 迁移到 presenter 之后，app 侧只剩视图模型转换（`conv/ui.rs` 的 BgFill/强调色映射）与
+# 系统主题探测需要 core；业务装配（读盘/起进程/写设置）全部在 presenter 的 host 里。
+unlucky-core = { path = "../core", version = "0.2" }
+unlucky-agent = { path = "../agent", version = "0.2" }
+# M82：同一个二进制也带 CLI 子命令（`unlucky-launcher instances list` …）。
+# 依赖方向 app → cli → core/agent 不违反 core 零 UI 铁律（guards.yml 的 core-no-ui 只查
+# `cargo tree -p unlucky-core`，core 不依赖 cli）。零 UI 依赖的 `ull` 仍在 `crates/cli`，
+# 给没有图形库的机器用——两者不是重复品。
+unlucky-cli = { path = "../cli", version = "0.2" }
+
+[build-dependencies]
+slint-build.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

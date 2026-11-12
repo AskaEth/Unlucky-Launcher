@@ -1,0 +1,121 @@
+name: Signing status（播报，不是门禁）
+
+# 第一句就是口径：**这是播报，不是门禁。它红了不代表不能合，它绿了也不代表签名就绪。**
+# 就绪度的结论只在 job summary 的三行字里（`packaging/check_signing_ready.py --line` 写的），
+# 不在 job 的颜色里。**本 workflow 不应被设为 required check**（GitHub 侧分支保护里不要勾它）。
+#
+# 为什么要有它（M255）：M254（CLAIMAUDIT）查出 `crates/core/src/update/trust.rs` 的 `PRODUCTION`
+# 表在 `PINNED-KEYS` 标记之间是空的，而空表一律 `KeyringEmpty` 拒装 ⇒ 今天任何正式二进制都验不过任何
+# 清单（fail-closed，用户端表现为「更新永远失败」）。工具链早就齐了，缺的是**可见性**：这三行读数让
+# 「今天差什么」在每次运行里都摆在台面上，而不是等发版时才发现。
+#
+# 口径四条（由 `packaging/tests/signing_ready_wiring_selftest.py` 的接线判据机器校验，不是靠注释自律）：
+#   ① 就绪度那一步抓 `rc=$?` 之后**恒 `exit 0`** —— 未就绪用 `::warning::` 播报，不用 error 级注解
+#      （error 会让人以为构建挂了，与播报定位直接冲突）。真正的红留在 `release-publish.yml` 的签名步：
+#      那里今天必然红是**对的**，因为签不出来的产物本来就不能发。
+#   ② 文件名/名字都不带 guards、check 字样：它不是守卫，是一条状态播报。
+#   ③ 本文件**刻意不声明 `workflow_call:`**：没有这个触发器，别的 workflow 就没法 `uses:` 它 ——
+#      「不能被接进 dev 线变成必需检查」是一条机制，不是一句嘱咐。接线自检另外扫全部 workflow，
+#      任何 `uses: …/signing-status.yml` 出现即红（防的是有人先加 workflow_call 再接进来）。
+#   ④ **生产签名种子只在 `refs/heads/main` 上注入**，且**没有 `pull_request` 触发**（M255 r1 P2-1）。
+#      这条是本文件唯一的**安全**口径，别为了「PR 上也能看读数」把它放开：
+#      - 仓库内分支的 PR / 任意分支的 dispatch **拿得到**仓库 Secret（只有 fork / Dependabot 拿不到）；
+#      - 而这把种子能给**全量已安装客户端**签出被信任的清单（自更新链 = 用户端 RCE），
+#        既有设计把它锁在 tag ref 后面（`release.yml` 的 `if: … github.ref_type == 'tag'`）。
+#      - 播报**不需要**在 PR 上跑：PR 改了 `check_signing_ready.py` 时，CI 会在那个 PR 自己的代码上执行它，
+#        若同时注入种子，等于把种子交给任何能推分支的人。
+#      门由两行 env 表达（同一个条件、同一个地方可审）：钥给 main，非 main 则给 `ULL_SIGNING_KEY_WITHHELD`
+#      一个原因串 —— 于是 ② 读成「未判定」而不是「没配」（把策略说成缺配是一次假读数）。
+#
+# 判据本体与 0/1/2 的语义：`packaging/check_signing_ready.py` 的文件头；
+# 人类要做的那几步：`packaging/docs/signing-runbook.md`。
+
+on:
+  push:
+    branches: [main]
+  # ⚠ 刻意**没有** `pull_request`（见口径④）。要读 PR 的签名就绪度，就跑 push 到分支或对着 main dispatch。
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # 尺子自测：它红 = **判据脚本坏了**（不是「签名没就绪」）。两者措辞在 summary 里分开写。
+  # 这一步照常会红，因为「尺子坏了」本来就该有人看见 —— 但它不阻断任何东西：本 workflow 独立、
+  # 非必需，也不在 `dev-guards.yml` 的 `uses:` 里。
+  selftest:
+    name: 判据自测（三行/退出码/变异重放/接线）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 判据本体（三行 / 0/1/2 / 两向退出码变异 / --key 用法错 / 指针章节）
+        run: python3 packaging/tests/signing_ready_selftest.py
+      # 接线单独一份（400 行红线）：播报不是门禁、**生产种子只在 main 注入**、文档指针真的存在，
+      # 以及「去掉 ref 门 / 加回 pull_request / 改坏文档路径 ⇒ 必须红」三处变异重放。
+      - name: 接线（ref 门 / 不被别的 workflow 复用 / 无 error 级注解 / 文档路径存在性 + 三处变异）
+        run: python3 packaging/tests/signing_ready_wiring_selftest.py
+      - name: 真跑三种情形（今天的状态 / 假 PinnedKey 副本 / 用法错）
+        run: |
+          set -uo pipefail
+          work="$RUNNER_TEMP/signing-ready"
+          mkdir -p "$work"
+          # 结论只打印，不判定：这里要的是「三种情形各自的退出码与三行读数长什么样」，
+          # 判据在上一跑的 selftest 里。所有 `|| true` 只为让这一步本身不变红。
+          run_and_show() {  # run_and_show <说明> <命令...>
+            note="$1"; shift
+            echo "── $note"
+            python3 packaging/check_signing_ready.py "$@" 2>&1 || true
+            echo
+          }
+          run_and_show "今天的状态（真实 trust.rs：表空 ⇒ 未就绪）"
+          # 副本夹一条假 PinnedKey（**不碰真实 trust.rs**）：造出「就绪」的正路长什么样。
+          python3 - "$work" <<'PY'
+          import sys
+          from pathlib import Path
+
+          trust = Path("crates/core/src/update/trust.rs").read_text(encoding="utf-8")
+          begin = trust.index(">>> PINNED-KEYS >>>") + len(">>> PINNED-KEYS >>>")
+          end = trust.index("<<< PINNED-KEYS <<<")
+          fake = '    PinnedKey { key_id: "demo-not-a-real-key", public_key_hex: "' + "ab" * 32 + '" },\n'
+          Path(sys.argv[1], "trust-with-fake-key.rs").write_text(
+              trust[:begin] + "\n" + fake + trust[end:], encoding="utf-8"
+          )
+          PY
+          run_and_show "副本夹一条假 PinnedKey（②仍缺钥 ⇒ 仍未就绪，但 ① 会变就绪）" \
+            --trust "$work/trust-with-fake-key.rs"
+          run_and_show "用法错（不存在的 trust.rs ⇒ 2）" --trust "$work/nope/trust.rs" || true
+
+  # 播报：只把三行搬进 job summary，不看颜色。
+  status:
+    name: 签名就绪度（播报）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ② 要读「环境里有没有钥」，所以把 Secret 传进来 —— **只在 main ref 上**（口径④）。
+      # 门是下面这两行 env（同一个条件），不是 `if:`：这样非 main 的运行照样跑完三行读数，
+      # 只是 ② 读成「未判定」，而不是整个 job 被跳过后一片空白。
+      # ⚠ 这两行是安全边界，接线自检钉着它们（去掉 ref 门 / 加回 pull_request 都会当场红）。
+      - name: 三行就绪度（脚本给 0/1/2；本步恒 exit 0）
+        env:
+          ULL_MANIFEST_SIGNING_KEY: ${{ github.ref == 'refs/heads/main' && secrets.ULL_MANIFEST_SIGNING_KEY || '' }}
+          ULL_SIGNING_KEY_WITHHELD: ${{ github.ref == 'refs/heads/main' && '' || '非 main ref（按设计不注入 Secret；要读这一行请对 main 跑）' }}
+        run: |
+          set -uo pipefail
+          set +e
+          python3 packaging/check_signing_ready.py --line > "$RUNNER_TEMP/signing-ready.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/signing-ready.txt"
+          case "$rc" in
+            0) echo "::notice::签名就绪：信任表非空，且环境里的钥与它同源。这是一条播报，不是门禁。" ;;
+            1) echo "::warning::签名未就绪（或 ② 未判定）：该做什么见 packaging/docs/signing-runbook.md §2 的下单清单。" ;;
+            *) echo "::warning::就绪度脚本用不了（rc=$rc，用法错）：这是尺子的问题，不是签名状态 —— 看上面的 stderr。" ;;
+          esac
+          {
+            echo
+            echo "- 本 workflow 是**播报**，不是门禁：**不应被设为 required**，也不阻断任何其它 job。"
+            echo "- 颜色 ≠ 结论：绿色只说明脚本跑完了；结论只看上面三行（尤其 ①「信任表」）。"
+            echo "- **Secret 只在 \`refs/heads/main\` 上注入**（生产签名种子锁在 main / tag 后面）；非 main ref 的 ② 显示「未判定」而不是「没配」。"
+            echo "- 真门禁在哪：\`release-publish.yml\` 的签名步（\`--check-pinned-keyring\` / \`--sign\` / \`--verify-pinned\`）。"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
