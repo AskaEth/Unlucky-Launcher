@@ -1,0 +1,19 @@
+[package]
+name = "unlucky-design"
+description = "Unlucky-Launcher 设计令牌：M3 Expressive 色彩/排版/形状/高程/动效/图标，纯数据 + 纯函数，零 UI 依赖"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 零 UI 依赖是硬约束（D3 纪律 + M61）：本 crate 是渲染无关的**数据与纯函数**，
+# 不得出现 iced / slint / winit / wgpu / gtk / egui / tauri 等 UI 或渲染框架，
+# 也不引入任何第三方 crate（连 serde 都不加——序列化由消费方适配层自己做）。
+# 证据命令：cargo tree -p unlucky-design --edges normal
+[dependencies]
+
+[lints]
+workspace = true

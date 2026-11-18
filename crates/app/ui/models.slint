@@ -1,0 +1,364 @@
+// UI 视图模型：Rust 的 dto.rs 做单向转换后喂给 Slint（app 不 import core 内部类型，01c §5）。
+// 命名一律 kebab-case，Rust 侧 slint-build 会生成 snake_case 字段。
+// 约定：这里只放「界面要显示什么」，不放领域语义（版本继承链、下载源健康度等留在 core）。
+
+// ── 共享枚举 ─────────────────────────────────────────────────────
+export enum RouteKind {
+    instances,
+    download,
+    logs,
+    settings,
+    detail,
+    agent,
+}
+
+export enum TileSize {
+    small,
+    medium,
+    large,
+}
+
+export enum InstanceView {
+    tiles,
+    list,
+}
+
+/// D17 主题三态：auto 跟随系统（Slint Palette.color-scheme 热更），light/dark 钉死。
+/// 键值 `appearance.theme_mode ∈ {light, dark, auto}`，出厂 auto。
+export enum ThemeMode {
+    auto,
+    light,
+    dark,
+}
+
+/// 背景图填充模式（09 §101：cover / contain / tile）。与 `core::setting::appearance::BgFill` 同序。
+export enum BgFillKind {
+    cover,
+    contain,
+    tile,
+}
+
+export enum LoaderKind {
+    vanilla,
+    fabric,
+    quilt,
+    forge,
+    neoforge,
+    optifine,
+    liteloader,
+}
+
+export enum RuntimePhase {
+    idle,
+    downloading,
+    verifying,
+    launching,
+    running,
+    failed,
+}
+
+export enum ChatRole {
+    user,
+    assistant,
+    tool,
+    system,
+}
+
+export enum DialogKind {
+    confirm,
+    input,
+    progress,
+    error,
+}
+
+export enum ToastKind {
+    info,
+    success,
+    warn,
+    error,
+}
+
+export enum VersionKind {
+    release,
+    snapshot,
+    ancientClassic,
+    ancientAlpha,
+    ancientBeta,
+    ancientUnlisted,
+    modpack,
+    mod,
+}
+
+// 下载页分类侧栏的选中项（远古版把四个子类提升为平级枚值，便于单选高亮）
+export enum DownloadCategory {
+    release,
+    snapshot,
+    ancientClassic,
+    ancientAlpha,
+    ancientBeta,
+    ancientUnlisted,
+    modpack,
+    mod,
+}
+
+export enum LogOutcome {
+    ok,
+    crashed,
+    silentFail,
+}
+
+export enum LogLevel {
+    debug,
+    info,
+    warn,
+    error,
+}
+
+export enum SettingSection {
+    general,
+    /// D17「外观（高级）」：主题三态 / 背景图 / 半透明度 / 玻璃拟态 / 强调色 / 动画强度
+    appearance,
+    data,
+    download,
+    java,
+    account,
+    ai,
+    proxy,
+    about,
+}
+
+// ── 磁贴 ────────────────────────────────────────────────────────
+// row/col 由 Rust state.rs 的 tile_grid() 按当前磁贴尺寸算好（小 6 / 中 4 / 大 3 列），
+// 这样 Slint 侧 GridLayout 只消费整数位置，不必在 DSL 里做除法。
+export struct UiTile {
+    id: string,
+    name: string,
+    mc_version: string,
+    loader: LoaderKind,
+    loader_version: string,
+    /// 加载器徽标文字（「原版」/「Fabric 0.16.5」）：由 Rust 侧用 `LoaderInfo::badge()` 拼好，
+    /// DSL 不做枚举→字符串映射（少一处双份真相）。
+    loader_label: string,
+    last_played: string,
+    phase: RuntimePhase,
+    /// 启动中阶段文案（「下载资源」/「校验文件」/「启动中」），idle 时为空。
+    phase_label: string,
+    /// 0.0~1.0；<= 0 表示进度未知（进度环转为不确定态）。
+    progress: float,
+    /// 实例图标；空 image 时退回「名字首字 + hue 底色」占位。
+    icon: image,
+    hue: color,
+    /// 名字首字，无图标时的占位字母（Rust 侧取首个字素）。
+    initial: string,
+    row: int,
+    col: int,
+}
+
+// ── 下载页 ──────────────────────────────────────────────────────
+export struct UiVersion {
+    id: string,
+    kind: VersionKind,
+    released: string,
+    installed: bool,
+    /// 远古版（classic/alpha/beta/unlisted）——列表行带徽标 + 页顶兼容性提示。
+    ancient: bool,
+}
+
+// ── 日志页 ──────────────────────────────────────────────────────
+export struct UiLogSession {
+    id: string,
+    when: string,
+    instance: string,
+    outcome: LogOutcome,
+    duration: string,
+}
+
+export struct UiLogLine {
+    text: string,
+    level: LogLevel,
+}
+
+/// D8 规则引擎结论（core::diagnose 的 DTO，app 只负责展示）。
+export struct UiDiagnosis {
+    rule: string,
+    title: string,
+    confidence: int,
+    hint: string,
+    has_fix: bool,
+}
+
+// ── AI 栏 ───────────────────────────────────────────────────────
+export struct UiChatMessage {
+    role: ChatRole,
+    text: string,
+    /// role == tool 时的工具名。
+    tool_name: string,
+    tool_ok: bool,
+    /// 流式未完成时 true（末尾显示光标块）。
+    streaming: bool,
+}
+
+// ── 对话框 / Toast ──────────────────────────────────────────────
+export struct UiDialog {
+    id: string,
+    kind: DialogKind,
+    title: string,
+    body: string,
+    primary: string,
+    secondary: string,
+    progress: float,
+    input_label: string,
+    input_value: string,
+}
+
+export struct UiToast {
+    id: string,
+    kind: ToastKind,
+    text: string,
+}
+
+// ── P3 全量接线的视图模型（账户 / Java / 安装 / 设置分组 / 通知 / 向导）──────────
+// 这些类型由 Rust 的 dto 单向转换（`conv/pages.rs`），Slint 只读不写业务真相。
+// 全部经 `page_state.slint` 的 `PageState` global 下发（避免 main/shell 的属性转发膨胀）。
+
+export enum AccountKind {
+    offline,
+    microsoft,
+    authlib,
+}
+
+export struct UiAccount {
+    id: string,
+    name: string,
+    kind: AccountKind,
+    kind_label: string,
+    profile_id: string,
+    login_name: string,
+    created: string,
+    active: bool,
+}
+
+/// 微软登录面板（用户码 / 授权链接都不是凭据，可直接展示）。
+export struct UiDeviceCode {
+    visible: bool,
+    busy: bool,
+    user_code: string,
+    verification_uri: string,
+    qr_link: string,
+    expires: int,
+    message: string,
+    phase_label: string,
+}
+
+export enum JavaStepOutcome {
+    pending,
+    skip,
+    failed,
+    hit,
+}
+
+export struct UiJavaStep {
+    vendor: string,
+    outcome: JavaStepOutcome,
+    outcome_label: string,
+    detail: string,
+}
+
+export struct UiJavaVendor {
+    id: string,
+    display: string,
+    rank: int,
+    majors: string,
+    sources: string,
+    installed: bool,
+}
+
+export struct UiJavaRuntime {
+    binary: string,
+    version: string,
+    vendor: string,
+    origin: string,
+}
+
+export enum InstallStage {
+    planning,
+    downloading,
+    installing,
+    registering,
+    done,
+    failed,
+    cancelled,
+}
+
+export struct UiInstallProgress {
+    visible: bool,
+    version: string,
+    instance: string,
+    loader: string,
+    stage: InstallStage,
+    stage_label: string,
+    ratio: float,
+    known: bool,
+    files_label: string,
+    bytes_label: string,
+    speed: string,
+    eta: string,
+    message: string,
+    terminal: bool,
+    failed: bool,
+}
+
+export enum SettingControl {
+    toggle,
+    choice,
+    text,
+    readonly,
+    action,
+}
+
+export struct UiSettingRow {
+    key: string,
+    label: string,
+    description: string,
+    control: SettingControl,
+    flag: bool,
+    selected: int,
+    options: [string],
+    value_text: string,
+    action: string,
+}
+
+export struct UiSettingGroup {
+    id: string,
+    title: string,
+    rows: [UiSettingRow],
+}
+
+export enum NoticeKind {
+    info,
+    warn,
+    error,
+}
+
+export struct UiNotice {
+    id: string,
+    kind: NoticeKind,
+    title: string,
+    body: string,
+}
+
+export struct UiWizard {
+    open: bool,
+    step: int,
+    step_label: string,
+    step_index: int,
+    step_total: int,
+    version: string,
+    loader: int,
+    loader_label: string,
+    loader_version: string,
+    name: string,
+    error: string,
+    busy: bool,
+    can-next: bool,
+}

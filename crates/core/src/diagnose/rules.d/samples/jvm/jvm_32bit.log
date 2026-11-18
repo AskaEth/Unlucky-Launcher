@@ -1,0 +1,3 @@
+[12:00:04] [main/INFO]: Starting JVM with -Xmx4096m
+Error occurred during initialization of VM
+Could not reserve enough space for 4194304KB object heap

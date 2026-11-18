@@ -1,0 +1,280 @@
+// G6 设置页（09 §2 P0·G6）：左子导航 + 右表单 + 搜索框（设置项多，防迷路）。
+// 「通用 / 外观（D17 三态 + 09 §101-104 高级四件，实现在 settings-appearance.slint）/ 数据 / AI /
+// 关于」是真实控件，Java / 账户 / 代理分组仍是入口按钮（等各自 mission 接实现）。
+// 关于页内嵌 AboutSlint —— Slint RF 2.0 许可义务（01c §8：关于页放官方部件）。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { SettingSection, TileSize, ThemeMode, BgFillKind } from "../models.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { SettingItem, SettingGroup, ControlKind } from "../widgets/setting-item.slint";
+import { AppearanceSection } from "settings-appearance.slint";
+import { AccountSection } from "settings-account.slint";
+import { SettingsGroups } from "settings-groups.slint";
+import { PageState } from "../page_state.slint";
+import { SearchField } from "../widgets/inputs.slint";
+import { AboutSlint, ScrollView } from "std-widgets.slint";
+
+component SectionRow inherits Rectangle {
+    in property <string> label: "";
+    in property <SettingSection> section: SettingSection.general;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 36px;
+    background: root.active ? Theme.accent-soft : (row-touch.has-hover ? Theme.bg-hover : transparent);
+
+    if root.active : Rectangle {
+        x: 0;
+        y: 0;
+        width: 3px;
+        height: root.height;
+        background: Theme.accent;
+    }
+
+    UiText {
+        x: Metrics.gap-3;
+        y: 0;
+        width: root.width - Metrics.gap-3 - Metrics.gap-2;
+        height: root.height;
+        role: TextRole.body;
+        text: root.label;
+        color: root.active ? Theme.accent : Theme.fg-primary;
+    }
+
+    row-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SettingsPage inherits Rectangle {
+    in-out property <SettingSection> section: SettingSection.general;
+    in-out property <string> query: "";
+
+    // 外观（D17：主题三态 + 09 §101-104 高级特性四件）
+    in-out property <ThemeMode> theme-mode: ThemeMode.auto;
+    in-out property <bool> bg-image-enabled: false;
+    in-out property <string> bg-image: "";
+    in-out property <BgFillKind> bg-fill: BgFillKind.cover;
+    in-out property <float> bg-dim: 0.35;
+    in-out property <float> panel-alpha: 1.0;
+    in-out property <bool> glass: false;
+    in-out property <string> accent-color: "";
+    in property <bool> accent-invalid: false;
+    // 通用
+    in-out property <TileSize> tile-size: TileSize.medium;
+    in-out property <bool> close-to-tray: true;
+
+    // 数据
+    in-out property <int> data-mode: 0;
+    in property <string> data-path: "";
+    // 下载
+    in-out property <int> download-concurrency: 1;
+    in property <string> region-label: "未知";
+    // 账户
+    in property <string> account-label: "未登录";
+    // AI
+    in-out property <int> ai-endpoint: 0;
+    in-out property <bool> yolo: false;
+    in-out property <bool> mcp-enabled: false;
+    // 代理
+    in-out property <string> proxy: "";
+    // 关于
+    in property <string> version: "";
+
+    callback section-changed(SettingSection);
+    callback query-changed(string);
+    callback theme-changed(ThemeMode);
+    callback bg-image-enabled-changed(bool);
+    callback bg-image-changed(string);
+    callback bg-fill-changed(BgFillKind);
+    callback bg-dim-changed(float);
+    callback panel-alpha-changed(float);
+    callback glass-changed(bool);
+    callback accent-color-changed(string);
+    callback accent-swatch-picked(int);
+    callback tile-size-changed(TileSize);
+    callback close-to-tray-changed(bool);
+    callback data-mode-changed(int);
+    callback download-concurrency-changed(int);
+    callback ai-endpoint-changed(int);
+    callback yolo-changed(bool);
+    callback mcp-changed(bool);
+    callback proxy-changed(string);
+    callback migrate-data();
+    callback login();
+    callback manage-java();
+    callback open-audit-log();
+    callback detect-region();
+
+    background: Theme.bg-canvas;
+
+    HorizontalLayout {
+        // ── 左子导航 ──────────────────────────────────────────────
+        Rectangle {
+            width: 200px;
+            background: Theme.bg-surface;
+
+            VerticalLayout {
+                padding-top: Metrics.gap-2;
+
+                SectionRow { label: "通用"; section: SettingSection.general; active: root.section == SettingSection.general; clicked => { root.section-changed(SettingSection.general); } }
+                SectionRow { label: "外观"; section: SettingSection.appearance; active: root.section == SettingSection.appearance; clicked => { root.section-changed(SettingSection.appearance); } }
+                SectionRow { label: "数据"; section: SettingSection.data; active: root.section == SettingSection.data; clicked => { root.section-changed(SettingSection.data); } }
+                SectionRow { label: "下载"; section: SettingSection.download; active: root.section == SettingSection.download; clicked => { root.section-changed(SettingSection.download); } }
+                SectionRow { label: "Java"; section: SettingSection.java; active: root.section == SettingSection.java; clicked => { root.section-changed(SettingSection.java); } }
+                SectionRow { label: "账户"; section: SettingSection.account; active: root.section == SettingSection.account; clicked => { root.section-changed(SettingSection.account); } }
+                SectionRow { label: "AI"; section: SettingSection.ai; active: root.section == SettingSection.ai; clicked => { root.section-changed(SettingSection.ai); } }
+                SectionRow { label: "代理"; section: SettingSection.proxy; active: root.section == SettingSection.proxy; clicked => { root.section-changed(SettingSection.proxy); } }
+                SectionRow { label: "关于"; section: SettingSection.about; active: root.section == SettingSection.about; clicked => { root.section-changed(SettingSection.about); } }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+            }
+        }
+
+        Rectangle { width: 1px; background: Theme.stroke; }
+
+        // ── 右表单 ────────────────────────────────────────────────
+        VerticalLayout {
+            vertical-stretch: 1;
+
+            Rectangle {
+                height: Metrics.page-header-height;
+                background: Theme.bg-surface;
+
+                HorizontalLayout {
+                    padding-left: Metrics.gap-4;
+                    padding-right: Metrics.gap-4;
+                    spacing: Metrics.gap-3;
+
+                    UiText {
+                        role: TextRole.subtitle;
+                        text: "设置";
+                        width: 72px;
+                    }
+                    SearchField {
+                        width: 240px;
+                        placeholder: "搜索设置项";
+                        text <=> root.query;
+                        edited(t) => { root.query-changed(t); }
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.stroke; }
+
+            ScrollView {
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    padding-bottom: Metrics.gap-5;
+
+                    // 外观（D17：主题三态 + 09 §101-104 高级四件；实现在 settings-appearance.slint）
+                    if root.section == SettingSection.appearance : AppearanceSection {
+                        theme-mode: root.theme-mode;
+                        bg-image-enabled: root.bg-image-enabled;
+                        bg-image: root.bg-image;
+                        bg-fill: root.bg-fill;
+                        bg-dim: root.bg-dim;
+                        panel-alpha: root.panel-alpha;
+                        glass: root.glass;
+                        accent-color: root.accent-color;
+                        accent-invalid: root.accent-invalid;
+                        theme-changed(m) => {
+                            root.theme-mode = m;
+                            root.theme-changed(m);
+                        }
+                        bg-image-enabled-changed(v) => {
+                            root.bg-image-enabled = v;
+                            root.bg-image-enabled-changed(v);
+                        }
+                        bg-image-changed(t) => {
+                            root.bg-image = t;
+                            root.bg-image-changed(t);
+                        }
+                        bg-fill-changed(f) => {
+                            root.bg-fill = f;
+                            root.bg-fill-changed(f);
+                        }
+                        bg-dim-changed(v) => {
+                            root.bg-dim = v;
+                            root.bg-dim-changed(v);
+                        }
+                        panel-alpha-changed(v) => {
+                            root.panel-alpha = v;
+                            root.panel-alpha-changed(v);
+                        }
+                        glass-changed(v) => {
+                            root.glass = v;
+                            root.glass-changed(v);
+                        }
+                        accent-color-changed(t) => {
+                            root.accent-color = t;
+                            root.accent-color-changed(t);
+                        }
+                        accent-swatch-picked(i) => { root.accent-swatch-picked(i); }
+                    }
+
+                    // ── 通用 ────────────────────────────────────────
+                    if root.section == SettingSection.general : SettingGroup { title: "外观"; }
+                    if root.section == SettingSection.general : SettingItem {
+                        label: "磁贴尺寸";
+                        description: "小 6 列 / 中 4 列（默认）/ 大 3 列";
+                        kind: ControlKind.segmented;
+                        options: ["小", "中", "大"];
+                        selected: root.tile-size == TileSize.small ? 0
+                            : root.tile-size == TileSize.large ? 2 : 1;
+                        changed(i) => {
+                            root.tile-size-changed(
+                                i == 0 ? TileSize.small : i == 2 ? TileSize.large : TileSize.medium);
+                        }
+                    }
+                    if root.section == SettingSection.general : SettingItem {
+                        label: "关闭窗口时最小化到托盘";
+                        description: "避免误关正在运行的游戏";
+                        kind: ControlKind.toggle;
+                        checked: root.close-to-tray;
+                        toggled(v) => { root.close-to-tray-changed(v); }
+                    }
+
+                    // ── 数据 / 下载 / Java / 账户 / AI / MCP ────────────
+                    // 行来自 core::setting schema（`PageState.setting-groups`），写回走
+                    // `SettingStore::set`——与 `ull config set` / AI `set_config` 同一份 launcher.json。
+                    if root.section == SettingSection.data : SettingsGroups { tab: "data"; }
+                    if root.section == SettingSection.download : SettingsGroups { tab: "download"; }
+                    if root.section == SettingSection.java : SettingsGroups { tab: "java"; }
+                    if root.section == SettingSection.ai : SettingsGroups { tab: "ai"; }
+                    if root.section == SettingSection.ai : SettingsGroups { tab: "mcp"; }
+                    if root.section == SettingSection.account : AccountSection { }
+
+                    // ── 代理 ────────────────────────────────────────
+                    if root.section == SettingSection.proxy : SettingGroup { title: "代理"; }
+                    if root.section == SettingSection.proxy : SettingItem {
+                        label: "HTTP 代理";
+                        description: "留空则使用系统代理";
+                        kind: ControlKind.text;
+                        button-text: "http://127.0.0.1:7890";
+                        value <=> root.proxy;
+                        edited(t) => { root.proxy-changed(t); }
+                    }
+
+                    // ── 关于 ────────────────────────────────────────
+                    if root.section == SettingSection.about : SettingGroup { title: "关于"; }
+                    if root.section == SettingSection.about : SettingItem {
+                        label: "版本";
+                        description: root.version;
+                    }
+                    if root.section == SettingSection.about : SettingItem {
+                        label: "许可";
+                        description: "Apache-2.0（Slint 走 RF 2.0 轨道）";
+                    }
+                    if root.section == SettingSection.about : Rectangle {
+                        height: 120px;
+                        AboutSlint { }
+                    }
+                }
+            }
+        }
+    }
+}

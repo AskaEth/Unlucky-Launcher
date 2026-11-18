@@ -1,0 +1,1 @@
+net.fabricmc.loader.impl.discovery.ModResolutionException: Found conflicting mods: sodium conflicts with sodium-extra

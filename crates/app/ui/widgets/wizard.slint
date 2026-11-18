@@ -1,0 +1,301 @@
+// 新建实例向导（G5，全屏模态）：版本 → 加载器 → 名字 → 确认 → 进度。
+// 步骤推进/校验在 Rust（`crate::wizard`），这里只画当前步与提交按钮。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiVersion, VersionKind } from "../models.slint";
+import { PageState } from "../page_state.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { Badge } from "../components/badge.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+import { MetroButton, ButtonKind } from "../widgets/button.slint";
+import { SearchField } from "../widgets/inputs.slint";
+import { InstallPanel } from "../components/install-panel.slint";
+import { ScrollView } from "std-widgets.slint";
+
+component StepDot inherits Rectangle {
+    in property <int> index: 0;
+    in property <string> label: "";
+
+    height: 28px;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: Metrics.gap-1;
+        alignment: center;
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: PageState.wizard.step >= root.index ? Theme.accent : Theme.bg-hover;
+            UiText {
+                role: TextRole.caption;
+                text: root.index + 1;
+                horizontal-alignment: center;
+                color: PageState.wizard.step >= root.index ? Theme.fg-on-accent : Theme.fg-secondary;
+            }
+        }
+        UiText {
+            role: TextRole.caption;
+            text: root.label;
+            color: PageState.wizard.step >= root.index ? Theme.fg-primary : Theme.fg-disabled;
+        }
+    }
+}
+
+component VersionChoice inherits Rectangle {
+    in property <UiVersion> data;
+    callback picked();
+
+    height: 36px;
+    background: PageState.wizard.version == root.data.id ? Theme.accent-soft
+        : (touch.has-hover ? Theme.bg-hover : transparent);
+
+    HorizontalLayout {
+        padding-left: Metrics.gap-3;
+        padding-right: Metrics.gap-3;
+        spacing: Metrics.gap-2;
+        UiText { role: TextRole.body; text: root.data.id; width: 160px; }
+        Badge {
+            text: root.data.kind == VersionKind.release ? "正式版" : "预览版";
+            tint: Theme.fg-secondary;
+        }
+        UiText { role: TextRole.caption; text: root.data.released; horizontal-stretch: 1; }
+        if PageState.wizard.version == root.data.id : AppIcon {
+            kind: IconKind.check;
+            icon-size: 14px;
+            tint: Theme.accent;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+component LoaderChoice inherits Rectangle {
+    in property <string> label: "";
+    in property <string> hint: "";
+    in property <int> index: 0;
+    callback picked();
+
+    height: 48px;
+    background: PageState.wizard.loader == root.index ? Theme.accent-soft
+        : (touch.has-hover ? Theme.bg-hover : transparent);
+
+    HorizontalLayout {
+        padding-left: Metrics.gap-3;
+        padding-right: Metrics.gap-3;
+        spacing: Metrics.gap-2;
+        VerticalLayout {
+            vertical-stretch: 1;
+            spacing: 0px;
+            UiText { role: TextRole.body; text: root.label; }
+            UiText { role: TextRole.caption; text: root.hint; horizontal-stretch: 1; }
+        }
+        if PageState.wizard.loader == root.index : AppIcon {
+            kind: IconKind.check;
+            icon-size: 14px;
+            tint: Theme.accent;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+export component NewInstanceWizard inherits Rectangle {
+    // 版本列表由 shell 传入（与下载页共用一份，避免二次拉取）
+    in property <[UiVersion]> versions;
+    in-out property <string> query: "";
+
+    visible: PageState.wizard.open;
+    background: rgba(0, 0, 0, 0.45);
+
+    // 吃掉底层点击（模态）
+    TouchArea { }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(parent.width - 80px, 720px);
+        height: min(parent.height - 60px, 560px);
+        background: Theme.bg-surface;
+        border-radius: Metrics.radius-md;
+        border-width: 1px;
+        border-color: Theme.stroke;
+
+        VerticalLayout {
+            // 标题栏
+            Rectangle {
+                height: 52px;
+                background: transparent;
+                HorizontalLayout {
+                    padding-left: Metrics.gap-4;
+                    padding-right: Metrics.gap-3;
+                    spacing: Metrics.gap-2;
+                    UiText {
+                        role: TextRole.subtitle;
+                        text: "新建实例 · " + PageState.wizard.step_label;
+                        horizontal-stretch: 1;
+                    }
+                    MetroButton {
+                        kind: ButtonKind.subtle;
+                        text: "关闭";
+                        button-height: 24px;
+                        clicked => { PageState.wizard-close(); }
+                    }
+                }
+            }
+
+            // 步骤指示
+            HorizontalLayout {
+                padding-left: Metrics.gap-4;
+                spacing: Metrics.gap-3;
+                StepDot { index: 0; label: "版本"; }
+                StepDot { index: 1; label: "加载器"; }
+                StepDot { index: 2; label: "名字"; }
+                StepDot { index: 3; label: "确认"; }
+                StepDot { index: 4; label: "进度"; }
+            }
+
+            Rectangle { height: 1px; background: Theme.stroke; }
+
+            // 步骤内容
+            Rectangle {
+                vertical-stretch: 1;
+                background: transparent;
+
+                // ① 选版本（只列正式版/快照，远古版走下载页的显式入口）
+                if PageState.wizard.step == 0 : VerticalLayout {
+                    padding: Metrics.gap-3;
+                    spacing: Metrics.gap-2;
+                    SearchField {
+                        width: 220px;
+                        text <=> root.query;
+                        placeholder: "筛选版本号";
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            for v in root.versions : VersionChoice {
+                                visible: !v.ancient;
+                                data: v;
+                                picked => { PageState.wizard-select-version(v.id); }
+                            }
+                        }
+                    }
+                }
+
+                // ② 选加载器
+                if PageState.wizard.step == 1 : VerticalLayout {
+                    padding: Metrics.gap-3;
+                    spacing: 0px;
+                    LoaderChoice { index: 0; label: "原版（Vanilla）"; hint: "不装加载器，最快最稳"; picked => { PageState.wizard-select-loader(0); } }
+                    LoaderChoice { index: 1; label: "Fabric"; hint: "轻量模组加载器（GUI 可直接装）"; picked => { PageState.wizard-select-loader(1); } }
+                    LoaderChoice { index: 2; label: "Quilt"; hint: "Fabric 的分支（GUI 可直接装）"; picked => { PageState.wizard-select-loader(2); } }
+                    LoaderChoice { index: 3; label: "Forge"; hint: "需要 installer processors（首装会外调 java，约 1–3 分钟）"; picked => { PageState.wizard-select-loader(3); } }
+                    LoaderChoice { index: 4; label: "NeoForge"; hint: "需要 installer processors（首装会外调 java，约 1–3 分钟）"; picked => { PageState.wizard-select-loader(4); } }
+                }
+
+                // ③ 名字
+                if PageState.wizard.step == 2 : VerticalLayout {
+                    padding: Metrics.gap-4;
+                    spacing: Metrics.gap-2;
+                    UiText { role: TextRole.body; text: "实例名（默认用版本号）"; }
+                    SearchField {
+                        width: 320px;
+                        text: PageState.wizard.name;
+                        placeholder: "例如：生存 1.20.4";
+                        edited(t) => { PageState.wizard-name-changed(t); }
+                    }
+                    if PageState.wizard.error != "" : UiText {
+                        role: TextRole.caption;
+                        text: PageState.wizard.error;
+                        color: Theme.state-danger;
+                    }
+                    UiText {
+                        role: TextRole.caption;
+                        text: "不能包含 / \\ : * ? \" < > |，最多 64 个字符。";
+                    }
+                }
+
+                // ④ 确认
+                if PageState.wizard.step == 3 : VerticalLayout {
+                    padding: Metrics.gap-4;
+                    spacing: Metrics.gap-2;
+                    UiText { role: TextRole.bodyStrong; text: "将创建实例"; }
+                    UiText { role: TextRole.body; text: "版本 " + PageState.wizard.version; }
+                    UiText { role: TextRole.body; text: "加载器 " + PageState.wizard.loader_label; }
+                    UiText { role: TextRole.body; text: "实例名 " + PageState.wizard.name; }
+                    UiText {
+                        role: TextRole.caption;
+                        text: "确认后会按 core 安装管线下载：版本 JSON → 客户端 jar → 库 → 资源索引 → 登记实例。";
+                        wrap: word-wrap;
+                    }
+                    if PageState.wizard.error != "" : UiText {
+                        role: TextRole.caption;
+                        text: PageState.wizard.error;
+                        color: Theme.state-danger;
+                    }
+                }
+
+                // ⑤ 进度
+                if PageState.wizard.step == 4 : VerticalLayout {
+                    padding: Metrics.gap-3;
+                    spacing: Metrics.gap-2;
+                    InstallPanel {
+                        data: PageState.install;
+                        cancel => { PageState.install-cancel(); }
+                    }
+                    UiText {
+                        role: TextRole.caption;
+                        text: "装完会自动跳到实例页；失败原因会显示在上面。";
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.stroke; }
+
+            // 底部按钮
+            Rectangle {
+                height: 56px;
+                background: transparent;
+                HorizontalLayout {
+                    padding: Metrics.gap-4;
+                    spacing: Metrics.gap-2;
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    MetroButton {
+                        kind: ButtonKind.subtle;
+                        text: "上一步";
+                        button-height: 30px;
+                        enabled: PageState.wizard.step > 0 && PageState.wizard.step < 4;
+                        clicked => { PageState.wizard-back(); }
+                    }
+                    if PageState.wizard.step < 3 : MetroButton {
+                        kind: ButtonKind.accent;
+                        text: "下一步";
+                        button-height: 30px;
+                        enabled: PageState.wizard.can-next;
+                        clicked => { PageState.wizard-next(); }
+                    }
+                    if PageState.wizard.step == 3 : MetroButton {
+                        kind: ButtonKind.accent;
+                        text: "开始安装";
+                        button-height: 30px;
+                        enabled: PageState.wizard.can-next && !PageState.wizard.busy;
+                        clicked => { PageState.wizard-confirm(); }
+                    }
+                    if PageState.wizard.step == 4 : MetroButton {
+                        kind: ButtonKind.standard;
+                        text: "后台继续";
+                        button-height: 30px;
+                        clicked => { PageState.wizard-close(); }
+                    }
+                }
+            }
+        }
+    }
+}

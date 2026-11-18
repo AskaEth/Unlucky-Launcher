@@ -1,0 +1,61 @@
+{
+  "data": [
+    {
+      "id": 394468,
+      "name": "Sodium",
+      "slug": "sodium",
+      "summary": "Modern rendering engine and client-side optimization mod",
+      "authors": [{ "name": "jellysquid3", "url": "https://example.invalid/jelly" }],
+      "downloadCount": 42123456,
+      "dateModified": "2026-02-03T10:11:12Z",
+      "categories": [
+        { "id": 4068, "name": "Optimization", "slug": "optimization" },
+        { "id": 4483, "name": "Fabric", "slug": "fabric" }
+      ],
+      "latestFilesIndexes": [
+        {
+          "gameVersion": "1.21.1",
+          "fileId": 5512345,
+          "filename": "sodium-fabric-0.6.0+mc1.21.1.jar",
+          "releaseType": 1,
+          "modLoader": 4
+        },
+        {
+          "gameVersion": "1.21.1",
+          "fileId": 5512346,
+          "filename": "sodium-neoforge-0.6.0+mc1.21.1.jar",
+          "releaseType": 1,
+          "modLoader": 6
+        },
+        {
+          "gameVersion": "1.20.1",
+          "fileId": 5512347,
+          "filename": "sodium-fabric-0.5.8+mc1.20.1.jar",
+          "releaseType": 1,
+          "modLoader": 4
+        }
+      ],
+      "logo": { "url": "https://media.forgecdn.net/avatars/sodium.png" }
+    },
+    {
+      "id": 238222,
+      "name": "Just Enough Items",
+      "slug": "jei",
+      "summary": "View items and recipes",
+      "authors": [{ "name": "mezz" }],
+      "downloadCount": 312345678,
+      "dateModified": "2026-01-20T08:00:00Z",
+      "categories": [{ "name": "Map and Information", "slug": "map-information" }],
+      "latestFilesIndexes": [
+        {
+          "gameVersion": "1.20.1",
+          "fileId": 4455667,
+          "filename": "jei-1.20.1-forge-15.2.0.27.jar",
+          "releaseType": 2,
+          "modLoader": 1
+        }
+      ]
+    }
+  ],
+  "pagination": { "index": 0, "pageSize": 2, "resultCount": 2, "totalCount": 12345 }
+}

@@ -1,0 +1,34 @@
+// 排版角色封装：所有文字都走 UiText，不在页面里散落 font-size/font-family 字面量。
+// 角色 → 字号/字重/默认前景色由 tokens.slint 的 ramp 决定；外部赋值可覆盖（例如强调色标题）。
+import { Theme } from "../theme/tokens.slint";
+
+export enum TextRole {
+    display,
+    title,
+    subtitle,
+    body,
+    bodyStrong,
+    caption,
+    mono,
+    monoSmall,
+}
+
+export component UiText inherits Text {
+    in property <TextRole> role: TextRole.body;
+
+    color: role == TextRole.caption ? Theme.fg-secondary : Theme.fg-primary;
+    font-family: (role == TextRole.mono || role == TextRole.monoSmall)
+        ? Theme.font-family-mono
+        : Theme.font-family;
+    font-size: (role == TextRole.display) ? Theme.font-size-display
+        : (role == TextRole.title) ? Theme.font-size-title
+        : (role == TextRole.subtitle) ? Theme.font-size-subtitle
+        : (role == TextRole.caption || role == TextRole.monoSmall) ? Theme.font-size-caption
+        : Theme.font-size-body;
+    font-weight: (role == TextRole.bodyStrong || role == TextRole.title || role == TextRole.display)
+        ? 600
+        : 400;
+    vertical-alignment: center;
+    wrap: no-wrap;
+    overflow: elide;
+}

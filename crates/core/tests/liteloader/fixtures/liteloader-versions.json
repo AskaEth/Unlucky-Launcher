@@ -1,0 +1,98 @@
+{
+  "meta": {
+    "description": "LiteLoader is a lightweight mod bootstrap designed to provide basic loader functionality for mods which don't need to modify game mechanics.",
+    "authors": "Mumfrey",
+    "url": "http://dl.liteloader.com",
+    "updated": "2017-11-29T16:31:41+00:00",
+    "updatedTime": 1511973101
+  },
+  "versions": {
+    "1.7.10": {
+      "repo": {
+        "stream": "RELEASE",
+        "type": "ivy",
+        "url": "http://dl.liteloader.com/versions/",
+        "classifier": "mcpnames"
+      },
+      "artefacts": {
+        "com.mumfrey:liteloader": {
+          "63ada46e033d0cb6782bada09ad5ca4e": {
+            "tweakClass": "com.mumfrey.liteloader.launch.LiteLoaderTweaker",
+            "libraries": [
+              { "name": "net.minecraft:launchwrapper:1.11" },
+              { "name": "org.ow2.asm:asm-all:5.0.3" }
+            ],
+            "srcJar": "liteloader-1.7.10_04-mcpnames-sources.jar",
+            "mcpJar": "liteloader-1.7.10_04-mcpnames.jar",
+            "stream": "RELEASE",
+            "file": "liteloader-1.7.10_04.jar",
+            "version": "1.7.10_04",
+            "md5": "63ada46e033d0cb6782bada09ad5ca4e",
+            "timestamp": "1414368553"
+          },
+          "db7235aefd407ac1fde09a7baba50839": {
+            "tweakClass": "com.mumfrey.liteloader.launch.LiteLoaderTweaker",
+            "libraries": [
+              { "name": "net.minecraft:launchwrapper:1.9" },
+              {
+                "name": "org.ow2.asm:asm-all:5.0.3",
+                "url": "http://repo.maven.apache.org/maven2/"
+              }
+            ],
+            "stream": "RELEASE",
+            "file": "liteloader-1.7.10_00.jar",
+            "version": "1.7.10_00",
+            "md5": "db7235aefd407ac1fde09a7baba50839",
+            "timestamp": "1404330030"
+          }
+        }
+      }
+    },
+    "1.12.2": {
+      "repo": {
+        "stream": "SNAPSHOT",
+        "type": "m2",
+        "url": "http://repo.mumfrey.com/content/repositories/snapshots/",
+        "classifier": ""
+      },
+      "snapshots": {
+        "libraries": [
+          { "name": "net.minecraft:launchwrapper:1.12" },
+          {
+            "name": "org.spongepowered:mixin:0.7.4-SNAPSHOT",
+            "url": "https://repo.spongepowered.org/maven/"
+          }
+        ],
+        "com.mumfrey:liteloader": {
+          "1420785ecbfed5aff4a586c5c9dd97eb": {
+            "tweakClass": "com.mumfrey.liteloader.launch.LiteLoaderTweaker",
+            "libraries": [
+              { "name": "net.minecraft:launchwrapper:1.12" },
+              { "name": "org.ow2.asm:asm-all:5.2" }
+            ],
+            "stream": "SNAPSHOT",
+            "file": "liteloader-1.12.2-SNAPSHOT.jar",
+            "version": "1.12.2-SNAPSHOT",
+            "build": "1.12.2-SNAPSHOT-r4CC2BB0-b4-4",
+            "md5": "1420785ecbfed5aff4a586c5c9dd97eb",
+            "timestamp": "1511880271",
+            "lastSuccessfulBuild": 4
+          },
+          "latest": {
+            "tweakClass": "com.mumfrey.liteloader.launch.LiteLoaderTweaker",
+            "libraries": [
+              { "name": "net.minecraft:launchwrapper:1.12" },
+              { "name": "org.ow2.asm:asm-all:5.2" }
+            ],
+            "stream": "SNAPSHOT",
+            "file": "liteloader-1.12.2-SNAPSHOT.jar",
+            "version": "1.12.2-SNAPSHOT",
+            "md5": "1420785ecbfed5aff4a586c5c9dd97eb",
+            "timestamp": "1511880271",
+            "lastSuccessfulBuild": 4
+          }
+        }
+      }
+    }
+  }
+}

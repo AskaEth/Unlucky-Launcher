@@ -1,0 +1,141 @@
+# 规则库 · Fabric mod 解析（8 条）
+# 移植自 HMCL CrashReportAnalyzer.Rule 的 Fabric 组（analyse/02 §7.3 第 5 组）。
+# Fabric 的 ModResolutionException 家族特征：异常后面跟一段以 " - " 开头的列表，
+# 因此这些规则用 file scope（跨行）。
+version: 1
+category: fabric
+rules:
+  - id: fabric.mod_resolution
+    severity: critical
+    scope: file
+    pattern: 'ModResolutionException: (?<reason>(.*)[\n\r]*( - (.*)[\n\r]*)+)'
+    confidence: 0.75
+    priority: 70
+    cause:
+      key: diagnose.cause.fabric.mod_resolution
+      summary: 'Fabric 解析 mod 依赖失败（缺依赖/版本冲突/模组不配套）'
+      detail: '按下方列出的 mod 名单逐个处理：缺依赖就补装，冲突就删一个'
+    fix_action:
+      - kind: remove_mod
+        action: disable
+        note: '按 Fabric 报的 mod 名单逐个禁用排查'
+    sample: samples/fabric/mod_resolution.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MOD_RESOLUTION'
+
+  - id: fabric.mod_resolution_conflict
+    severity: critical
+    pattern: 'ModResolutionException: Found conflicting mods: (?<sourcemod>.*) conflicts with (?<destmod>.*)'
+    confidence: 0.92
+    priority: 86
+    suppress:
+      - integrity.no_class_def_found
+      - integrity.no_such_method
+    cause:
+      key: diagnose.cause.fabric.mod_resolution_conflict
+      summary: 'Fabric 报告 mod 冲突：{sourcemod} 与 {destmod} 不能共存'
+      detail: '两个只能留一个（或都升级到互相兼容的版本）'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - '{sourcemod}'
+          - '{destmod}'
+        action: remove
+    sample: samples/fabric/mod_resolution_conflict.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MOD_RESOLUTION_CONFLICT'
+
+  - id: fabric.mod_resolution_missing
+    severity: critical
+    pattern: 'ModResolutionException: Could not find required mod: (?<sourcemod>.*) requires (?<destmod>.*)'
+    confidence: 0.9
+    priority: 85
+    cause:
+      key: diagnose.cause.fabric.mod_resolution_missing
+      summary: '缺少前置 mod：{sourcemod} 需要 {destmod}'
+      detail: '装上 {destmod} 的对应版本；装不上就删掉 {sourcemod}'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - '{sourcemod}'
+        action: replace
+        note: '补装前置 {destmod}，或换掉 {sourcemod}'
+    sample: samples/fabric/mod_resolution_missing.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MOD_RESOLUTION_MISSING'
+
+  - id: fabric.mod_resolution_missing_minecraft
+    severity: critical
+    pattern: 'ModResolutionException: Could not find required mod: (?<mod>.*) requires \{minecraft @ (?<version>.*)\}'
+    confidence: 0.9
+    priority: 85
+    cause:
+      key: diagnose.cause.fabric.mod_resolution_missing_minecraft
+      summary: '{mod} 要求 Minecraft {version}，与当前实例版本不一致'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - '{mod}'
+        action: replace
+        note: '换该 mod 的 {version} 版本，或改实例版本'
+    sample: samples/fabric/mod_resolution_missing_minecraft.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MOD_RESOLUTION_MISSING_MINECRAFT'
+
+  - id: fabric.mod_resolution_collection
+    severity: critical
+    pattern: 'ModResolutionException: Could not resolve valid mod collection \(at: (?<sourcemod>.*) requires (?<destmod>.*)\)'
+    confidence: 0.88
+    priority: 84
+    cause:
+      key: diagnose.cause.fabric.mod_resolution_collection
+      summary: 'mod 集合无法解析：{sourcemod} 与 {destmod} 的版本组合不成立'
+    fix_action:
+      - kind: remove_mod
+        mod_ids:
+          - '{sourcemod}'
+        action: upgrade
+    sample: samples/fabric/mod_resolution_collection.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MOD_RESOLUTION_COLLECTION'
+
+  - id: fabric.mod_resolution_details
+    severity: warning
+    pattern: '(\tMod File:|-- MOD |\tFailure message:)'
+    confidence: 0.5
+    priority: 45
+    cause:
+      key: diagnose.cause.fabric.mod_resolution_details
+      summary: 'Fabric 打印了 mod 解析明细（Mod File / Failure message）：具体结论见上方规则'
+      detail: '这条只表示「日志里有解析失败明细」，用于把证据片段指给 AI/用户'
+    fix_action:
+      - kind: seek_help
+        export_diagnostics: true
+    sample: samples/fabric/mod_resolution_details.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MOD_RESOLUTION0'
+
+  - id: fabric.loader_0_12
+    severity: critical
+    pattern: 'java\.lang\.NoClassDefFoundError: org/spongepowered/asm/mixin/transformer/FabricMixinTransformerProxy'
+    confidence: 0.85
+    priority: 80
+    cause:
+      key: diagnose.cause.fabric.loader_0_12
+      summary: 'Fabric Loader 0.12 与旧 mixin 类不兼容（loader 删掉了 deprecated 类）'
+    fix_action:
+      - kind: reinstall
+        component: fabric
+        note: '换匹配的 Fabric Loader 版本'
+    sample: samples/fabric/loader_0_12.log
+    source: 'HMCL CrashReportAnalyzer.Rule.FABRIC_VERSION_0_12'
+
+  - id: fabric.warnings
+    severity: warning
+    scope: file
+    pattern: '(Warnings were found!|Incompatible mod set!|Incompatible mods found!)(.*?)[\n\r]+(?<reason>[^\[]+)\['
+    confidence: 0.7
+    priority: 62
+    cause:
+      key: diagnose.cause.fabric.warnings
+      summary: 'Fabric 报告 mod 集合不兼容：{reason}'
+    fix_action:
+      - kind: remove_mod
+        action: disable
+        note: '按警告列表逐个禁用'
+    sample: samples/fabric/warnings.log
+    source: 'HMCL CrashReportAnalyzer.Rule.FABRIC_WARNINGS'

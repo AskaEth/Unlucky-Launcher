@@ -1,0 +1,6 @@
+[12:01:21] [Worker-Main-1/ERROR]: Unable to bake model
+java.lang.RuntimeException: Failed to tessellate
+-- Block being tessellated --
+Details:
+	Block: minecraft:grass_block
+	Block location: World: (12,64,-34)

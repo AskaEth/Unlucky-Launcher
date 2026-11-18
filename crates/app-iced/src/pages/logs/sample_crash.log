@@ -1,0 +1,23 @@
+# M95 演示数据：一段真实崩溃日志的片段（页面用 include_str! 编译期内嵌，运行时不读盘）。
+#
+# 每行格式：`<等级> <原文>`，等级 = D(debug) / I(info) / W(warn) / E(error)；`#` 开头是注释。
+#
+# 这份样例是故意挑的（tower 要求的两条真风险都压在这里）：
+#   1. 中文 + 堆栈混排 —— mono 族（Windows 上是 Consolas / Cascadia Mono）没有 CJK 字形，
+#      中文要靠 cosmic-text 逐字回退到系统 CJK 族，字宽与 Latin 1ch 不等；页面选的是折行，
+#      所以「列对齐」不参与版面，回退只影响同一行内的视觉密度；
+#   2. 超长行 —— 第 9/10/11 行都在 200 字符以上（真实 Java 堆栈的长度），正文列上限 424px，
+#      折行策略见 `logs.rs` 模块文档。
+I [19:40:12] [main/INFO] 正在启动 1.20.4，实例「开发测试」，加载器 NeoForge 21.1.72
+I [19:40:12] [main/INFO] Java 21.0.5 (Microsoft build 21.0.5+11-LTS), 内存 4096 MiB, JVM 参数 -Xmx4G -XX:+UseG1GC -Dfile.encoding=UTF-8 -Djava.library.path=C:\Users\Player\AppData\Roaming\.unlucky\instances\dev-test\natives
+W [19:40:13] [Render thread/WARN] GLFW 报告 OpenGL 2.1，低于所需的 3.2；显卡驱动可能是 Microsoft Basic Display Adapter
+E [19:40:14] [Render thread/ERROR] 显卡驱动不支持 OpenGL 3.2，初始化窗口失败
+E java.lang.IllegalStateException: GLFW error before init: [0x10008] Failed to create window: WGL: The driver does not appear to support OpenGL
+E 	at com.mojang.blaze3d.platform.GLX._initGlfw(GLX.java:64)
+E 	at net.minecraft.client.MainWindow.<init>(MainWindow.java:261)
+E 	at net.minecraft.client.Minecraft.<init>(Minecraft.java:472)
+E 	at net.neoforged.fml.loading.targets.CommonLaunchHandler.clientService(CommonLaunchHandler.java:98)
+E Caused by: java.lang.UnsatisfiedLinkError: C:\Users\Player\AppData\Roaming\.unlucky\instances\dev-test\natives\lwjgl_opengl.dll: 找不到指定的模块。 (error code 126, 依赖的 d3dcompiler_47.dll 或 vcruntime140.dll 缺失时也会报同一条)
+W [19:40:15] [main/WARN] 正在生成本地崩溃报告 crash-2026-11-02_19.40.15-client.txt，请勿关闭窗口
+I [19:40:16] [main/INFO] 已加载 148 个模组，其中 3 个标记为客户端专用：iris-1.7.4, sodium-0.5.11, indium-1.0.32
+E [19:40:16] [main/ERROR] 启动失败：exit code 1（进程存活 4 秒）

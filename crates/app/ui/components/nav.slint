@@ -1,0 +1,182 @@
+// 左侧主导航（D16 §1）：图标+文字，选中项 accent 色块；可折叠成纯图标窄条（偏好记忆）。
+// 折叠宽度/展开宽度取 Metrics，动画时长取 Theme.motion-normal。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { RouteKind } from "../models.slint";
+import { UiText, TextRole } from "label.slint";
+import { AppIcon, IconKind } from "icons.slint";
+
+component NavItem inherits Rectangle {
+    in property <IconKind> icon: IconKind.instances;
+    in property <string> label: "";
+    in property <bool> active: false;
+    in property <bool> collapsed: false;
+    callback clicked();
+
+    height: root.collapsed ? 48px : 64px;
+    background: root.active
+        ? Theme.accent-soft
+        : touch.has-hover ? Theme.bg-hover : transparent;
+    animate background { duration: Theme.motion-fast; }
+
+    // 选中态：左侧 accent 竖条（Metro 侧栏语义）
+    Rectangle {
+        visible: root.active;
+        x: 0;
+        y: 0;
+        width: 3px;
+        height: root.height;
+        background: Theme.accent;
+    }
+
+    AppIcon {
+        kind: root.icon;
+        icon-size: 20px;
+        x: (root.width - self.width) / 2;
+        y: root.collapsed ? (root.height - self.height) / 2 : 12px;
+        tint: root.active ? Theme.accent : Theme.fg-secondary;
+    }
+
+    UiText {
+        visible: !root.collapsed;
+        role: TextRole.caption;
+        text: root.label;
+        color: root.active ? Theme.accent : Theme.fg-secondary;
+        horizontal-alignment: center;
+        x: 0;
+        y: 38px;
+        width: root.width;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    accessible-role: button;
+    accessible-label: root.label;
+}
+
+export component Nav inherits Rectangle {
+    in property <RouteKind> active: RouteKind.instances;
+    in-out property <bool> collapsed: false;
+    in property <string> account-name: "未登录";
+    in property <color> account-hue: #5C2D91;
+    in property <string> account-initial: "?";
+    callback navigate(RouteKind);
+    callback toggle-collapsed();
+    callback account-clicked();
+
+    width: collapsed ? Metrics.nav-collapsed-width : Metrics.nav-expanded-width;
+    height: 100%;
+    background: Theme.bg-surface;
+    animate width { duration: Theme.motion-normal; easing: ease-in-out; }
+
+    // 右边界线
+    Rectangle {
+        x: root.width - 1px;
+        y: 0;
+        width: 1px;
+        height: root.height;
+        background: Theme.stroke;
+    }
+
+    VerticalLayout {
+        x: 0;
+        y: Metrics.gap-2;
+        width: root.width;
+        height: root.height - Metrics.gap-2 - Metrics.gap-2;
+
+        NavItem {
+            icon: IconKind.instances;
+            label: "实例";
+            active: root.active == RouteKind.instances || root.active == RouteKind.detail;
+            collapsed: root.collapsed;
+            clicked => { root.navigate(RouteKind.instances); }
+        }
+        NavItem {
+            icon: IconKind.download;
+            label: "下载";
+            active: root.active == RouteKind.download;
+            collapsed: root.collapsed;
+            clicked => { root.navigate(RouteKind.download); }
+        }
+        NavItem {
+            icon: IconKind.logs;
+            label: "日志";
+            active: root.active == RouteKind.logs;
+            collapsed: root.collapsed;
+            clicked => { root.navigate(RouteKind.logs); }
+        }
+        NavItem {
+            icon: IconKind.settings;
+            label: "设置";
+            active: root.active == RouteKind.settings;
+            collapsed: root.collapsed;
+            clicked => { root.navigate(RouteKind.settings); }
+        }
+
+        Rectangle { vertical-stretch: 1; background: transparent; }
+
+        // 底部：账户头像（点击进设置·账户）
+        Rectangle {
+            height: 56px;
+            background: account-touch.has-hover ? Theme.bg-hover : transparent;
+
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: root.account-hue;
+                x: (root.width - self.width) / 2;
+                y: 8px;
+
+                UiText {
+                    text: root.account-initial;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.fg-on-accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            UiText {
+                visible: !root.collapsed;
+                role: TextRole.caption;
+                text: root.account-name;
+                horizontal-alignment: center;
+                x: 0;
+                y: 38px;
+                width: root.width;
+            }
+
+            account-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.account-clicked(); }
+            }
+        }
+
+        // 折叠开关（偏好由 Rust 侧持久化到 ui.nav.collapsed）
+        Rectangle {
+            height: 40px;
+            background: toggle-touch.has-hover ? Theme.bg-hover : transparent;
+
+            AppIcon {
+                kind: root.collapsed ? IconKind.chevronRight : IconKind.chevronLeft;
+                icon-size: 16px;
+                x: (root.width - self.width) / 2;
+                y: (root.height - self.height) / 2;
+                tint: Theme.fg-secondary;
+            }
+
+            toggle-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.toggle-collapsed(); }
+            }
+
+            accessible-role: button;
+            accessible-label: root.collapsed ? "展开导航栏" : "折叠导航栏";
+        }
+    }
+}

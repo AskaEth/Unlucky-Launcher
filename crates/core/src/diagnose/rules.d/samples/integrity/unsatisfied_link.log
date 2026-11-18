@@ -1,0 +1,2 @@
+[12:00:37] [main/ERROR]: Failed to initialise LWJGL
+java.lang.UnsatisfiedLinkError: Failed to locate library: lwjgl.dll

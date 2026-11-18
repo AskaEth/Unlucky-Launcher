@@ -1,0 +1,5 @@
+[12:00:21] [Render thread/INFO]: Backend library: LWJGL version 3.4.3+13
+[12:00:21] [Render thread/INFO]: Using graphics backend VULKAN, using drivers: AMD proprietary driver
+[12:00:21] [Render thread/ERROR]: Vulkan loader library is missing
+[12:00:21] [Render thread/ERROR]: Failed to create backend VULKAN: Backend failure reason: vulkan_loader_missing
+[12:00:21] [Render thread/INFO]: Falling back to OpenGL

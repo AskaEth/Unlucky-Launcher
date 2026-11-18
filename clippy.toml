@@ -1,0 +1,7 @@
+# 与 Cargo.toml 的 rust-version 同步；改 MSRV 时两处一起改。
+msrv = "1.92"
+
+# core 的模块边界很薄，参数多于 8 个基本说明该拆结构体了。
+too-many-arguments-threshold = 8
+# 领域类型（版本号、哈希、URL）普遍是短名，不做最小名长惩罚。
+min-ident-chars-threshold = 2

@@ -1,0 +1,5 @@
+[12:00:21] [Render thread/INFO]: Using graphics backend VULKAN, using drivers: Mesa (zink)
+[12:00:21] [Render thread/ERROR]: Backend failure reason: vulkan_missing_extension
+[12:00:21] [Render thread/ERROR]: Device [AMD Radeon RX 580] does not support required extensions from FeatureSet [VULKAN_12], missing: [VK_KHR_dynamic_rendering, VK_KHR_push_descriptor]
+[12:00:21] [Render thread/ERROR]: Failed to create backend VULKAN
+[12:00:21] [Render thread/INFO]: Falling back to OpenGL

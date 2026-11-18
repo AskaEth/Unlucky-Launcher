@@ -1,0 +1,155 @@
+// 设置项行：左标签+说明，右控件。控件类型用 ControlKind 收敛，避免为每个设置项写一遍布局。
+// （Slint 没有 slot 机制，所以用 kind 枚举 + 通用属性把控件种类收在一处。）
+//
+// M41 增加两种控件：`slider`（强度/透明度滑条）与 `swatches`（预设色板 + 取色器入口），
+// 它们服务 09 §101-104 的「外观（高级）」四件——高级特性默认关闭，控件本身常显（关着也能调）。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { MetroButton, ButtonKind } from "button.slint";
+import {
+    ToggleSwitch, SegmentedControl, TextField, MetroSlider, ColorSwatches,
+} from "inputs.slint";
+
+export enum ControlKind {
+    none,
+    toggle,
+    segmented,
+    button,
+    text,
+    slider,
+    swatches,
+}
+
+export component SettingItem inherits Rectangle {
+    in property <string> label: "";
+    in property <string> description: "";
+    in property <ControlKind> kind: ControlKind.none;
+    in property <[string]> options;
+    in property <string> button-text: "";
+    in-out property <int> selected: 0;
+    in-out property <bool> checked: false;
+    in-out property <string> value: "";
+    // 滑条
+    in property <float> min-value: 0.0;
+    in property <float> max-value: 1.0;
+    in-out property <float> slider-value: 1.0;
+    // 色板
+    in property <[color]> swatch-colors;
+    in property <color> swatch-current: transparent;
+    // 危险/提示色描述（如「对比度偏低」）
+    in property <bool> warn: false;
+
+    callback toggled(bool);
+    callback changed(int);
+    callback clicked();
+    callback edited(string);
+    callback slid(float);
+    callback swatch-picked(int);
+
+    height: root.description == "" ? 44px : 60px;
+    background: transparent;
+
+    HorizontalLayout {
+        padding-left: Metrics.gap-4;
+        padding-right: Metrics.gap-4;
+        spacing: Metrics.gap-4;
+
+        VerticalLayout {
+            spacing: 0px;
+            vertical-stretch: 1;
+
+            UiText {
+                role: TextRole.body;
+                text: root.label;
+                horizontal-stretch: 1;
+            }
+            UiText {
+                role: TextRole.caption;
+                text: root.description;
+                visible: root.description != "";
+                color: root.warn ? Theme.state-warn : Theme.fg-secondary;
+                horizontal-stretch: 1;
+            }
+        }
+
+        if root.kind == ControlKind.toggle : ToggleSwitch {
+            checked: root.checked;
+            toggled(v) => {
+                root.checked = v;
+                root.toggled(v);
+            }
+        }
+
+        if root.kind == ControlKind.segmented : SegmentedControl {
+            width: root.options.length * 64px;
+            options: root.options;
+            selected: root.selected;
+            changed(i) => {
+                root.selected = i;
+                root.changed(i);
+            }
+        }
+
+        if root.kind == ControlKind.button : MetroButton {
+            kind: ButtonKind.standard;
+            text: root.button-text;
+            button-height: 28px;
+            clicked => { root.clicked(); }
+        }
+
+        if root.kind == ControlKind.text : TextField {
+            width: 240px;
+            placeholder: root.button-text;
+            text <=> root.value;
+            edited(t) => { root.edited(t); }
+        }
+
+        if root.kind == ControlKind.slider : HorizontalLayout {
+            spacing: Metrics.gap-2;
+            alignment: end;
+
+            UiText {
+                role: TextRole.caption;
+                text: (root.slider-value * 100).round() + "%";
+                width: 40px;
+                horizontal-alignment: right;
+                color: Theme.fg-secondary;
+            }
+            MetroSlider {
+                minimum: root.min-value;
+                maximum: root.max-value;
+                value: root.slider-value;
+                changed(v) => {
+                    root.slider-value = v;
+                    root.slid(v);
+                }
+            }
+        }
+
+        if root.kind == ControlKind.swatches : ColorSwatches {
+            palette: root.swatch-colors;
+            current: root.swatch-current;
+            picked(i) => { root.swatch-picked(i); }
+        }
+    }
+}
+
+/// 分组标题
+export component SettingGroup inherits Rectangle {
+    in property <string> title: "";
+
+    height: 36px;
+    background: transparent;
+
+    UiText {
+        x: Metrics.gap-4;
+        y: 0;
+        width: root.width - 2 * Metrics.gap-4;
+        height: root.height;
+        role: TextRole.caption;
+        text: root.title;
+        color: Theme.fg-secondary;
+        font-weight: 600;
+    }
+}

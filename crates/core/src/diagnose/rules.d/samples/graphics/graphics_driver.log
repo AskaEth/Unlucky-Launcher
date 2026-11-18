@@ -1,0 +1,7 @@
+#
+# A fatal error has been detected by the Java Runtime Environment:
+#
+#  EXCEPTION_ACCESS_VIOLATION (0xc0000005) at pc=0x00007ffb1a2b3c4d, pid=12344, tid=0x0000000000002a1c
+#
+# Problematic frame:
+# C  [ig8d64.dll+0x9b3c4d]

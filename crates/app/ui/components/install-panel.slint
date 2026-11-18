@@ -1,0 +1,73 @@
+// 安装进度卡片（下载页底部 / 向导进度步共用）：阶段 + 进度条 + 文件/字节/速度/剩余 + 取消。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiInstallProgress, InstallStage } from "../models.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { ProgressBar } from "../components/progress-bar.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+import { MetroButton, ButtonKind } from "../widgets/button.slint";
+
+export component InstallPanel inherits Rectangle {
+    in property <UiInstallProgress> data;
+    callback cancel();
+
+    height: 96px;
+    visible: root.data.visible;
+    background: Theme.bg-surface;
+    border-width: 1px;
+    border-color: Theme.stroke;
+
+    VerticalLayout {
+        padding: Metrics.gap-3;
+        spacing: Metrics.gap-1;
+
+        HorizontalLayout {
+            spacing: Metrics.gap-2;
+
+            AppIcon {
+                icon-size: 16px;
+                kind: root.data.failed ? IconKind.error
+                    : root.data.terminal ? IconKind.check
+                    : IconKind.download;
+                tint: root.data.failed ? Theme.state-danger
+                    : root.data.terminal ? Theme.state-success
+                    : Theme.accent;
+            }
+            UiText {
+                role: TextRole.bodyStrong;
+                text: root.data.instance + " · " + root.data.loader;
+                horizontal-stretch: 1;
+            }
+            UiText {
+                role: TextRole.caption;
+                text: root.data.stage_label;
+                color: root.data.failed ? Theme.state-danger : Theme.fg-secondary;
+            }
+            if !root.data.terminal : MetroButton {
+                kind: ButtonKind.subtle;
+                text: "取消";
+                button-height: 24px;
+                clicked => { root.cancel(); }
+            }
+        }
+
+        ProgressBar {
+            ratio: root.data.ratio;
+            known: root.data.known;
+        }
+
+        HorizontalLayout {
+            spacing: Metrics.gap-3;
+            UiText {
+                role: TextRole.caption;
+                text: root.data.message;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            UiText { role: TextRole.caption; text: root.data.files_label; }
+            UiText { role: TextRole.caption; text: root.data.bytes_label; }
+            UiText { role: TextRole.caption; text: root.data.speed; color: Theme.accent; }
+            UiText { role: TextRole.caption; text: root.data.eta; }
+        }
+    }
+}

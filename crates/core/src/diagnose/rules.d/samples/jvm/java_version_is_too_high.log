@@ -1,0 +1,3 @@
+[12:00:06] [main/ERROR]: Unable to launch
+java.lang.NoSuchFieldException: ucp
+	at java.base/java.lang.ClassLoader$UnsafeAccessor.getUnsafe(ClassLoader.java:123)

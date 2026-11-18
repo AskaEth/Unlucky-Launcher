@@ -1,0 +1,59 @@
+// 玻璃拟态卡片的公共底座（09 §103：Slint 没有 backdrop-filter，用「预生成模糊背景层」替代）。
+//
+// 手法：Rust 侧把背景图降采样成一张极小的图（`Theme.bg-blur`），渲染时被平滑放大 → 天然模糊。
+// 卡片里把它按 `absolute-position` **反向偏移**画出来，于是卡片显示的是「自己这一块屏幕区域的
+// 模糊影像」，视觉上就是毛玻璃；再叠一层半透明面板色保证文字可读（对比度优先）。
+//
+// 关闭态（`Theme.glass == false` 或无背景图）不画任何东西：卡片保持 Metro 纯色观感。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+
+export component GlassBase inherits Rectangle {
+    /// 卡片圆角（跟随宿主卡片）
+    in property <length> card-radius: Metrics.radius-md;
+    /// 叠在模糊层上的半透明面板色（保证前景对比度）
+    in property <color> tint: Theme.surface-solid;
+
+    out property <bool> active: Theme.glass && Theme.bg-blur.width > 0 && Theme.bg-image.width > 0;
+
+    x: 0;
+    y: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: root.card-radius;
+    clip: true;
+    background: transparent;
+
+    if root.active : Image {
+        // 整窗模糊层 + 反向偏移 = 只露出「卡片所在那一块」。
+        // 必须用 `parent`（本组件自身）的绝对位置：用 `self` 会与自身 x 形成绑定环
+        // （absolute-position 依赖 x，x 又依赖 absolute-position）。
+        source: Theme.bg-blur;
+        x: -parent.absolute-position.x;
+        y: -parent.absolute-position.y;
+        width: Theme.window-width;
+        height: Theme.window-height;
+        image-fit: cover;
+    }
+
+    if root.active : Rectangle {
+        // 暗化层要**重画一次**：模糊层在卡片内部、盖在窗口的暗化层之上，
+        // 不补这一层的话玻璃卡片会比周围亮一大截（05 截图验收时的真实问题）。
+        background: rgba(0, 0, 0, Theme.bg-dim);
+        border-radius: root.card-radius;
+    }
+
+    if root.active : Rectangle {
+        // 玻璃染色：面板底色 55% 不透明，字压得住背景（对比度优先于「更透」）
+        background: root.tint.with-alpha(0.55);
+        border-radius: root.card-radius;
+    }
+
+    if root.active : Rectangle {
+        // 上缘一道细高光，玻璃的「厚度感」
+        y: 0;
+        height: 1px;
+        width: root.width;
+        background: Theme.stroke.with-alpha(0.35);
+    }
+}

@@ -1,0 +1,204 @@
+// 下载页 · Java 分组（G2 的第二个分类）：四家发行版 + 回退链可视化 + 本地运行时。
+//
+// 回退链是「可观测性」核心：安装失败时用户要能看见 Temurin 跳过 → Oracle 失败 →
+// Microsoft 命中的每一步原因（D23），而不是只看到一句「下载失败」。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiJavaVendor, UiJavaStep, UiJavaRuntime, JavaStepOutcome } from "../models.slint";
+import { PageState } from "../page_state.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { Badge } from "../components/badge.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+import { MetroButton, ButtonKind } from "../widgets/button.slint";
+import { ScrollView } from "std-widgets.slint";
+
+component ChainStep inherits Rectangle {
+    in property <UiJavaStep> step;
+
+    height: 26px;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: Metrics.gap-1;
+
+        AppIcon {
+            icon-size: 12px;
+            kind: root.step.outcome == JavaStepOutcome.hit ? IconKind.check
+                : root.step.outcome == JavaStepOutcome.failed ? IconKind.error
+                : root.step.outcome == JavaStepOutcome.skip ? IconKind.warn
+                : IconKind.more;
+            tint: root.step.outcome == JavaStepOutcome.hit ? Theme.state-success
+                : root.step.outcome == JavaStepOutcome.failed ? Theme.state-danger
+                : Theme.fg-secondary;
+        }
+        UiText {
+            role: TextRole.caption;
+            text: root.step.vendor;
+            width: 72px;
+            color: root.step.outcome == JavaStepOutcome.hit ? Theme.state-success : Theme.fg-primary;
+        }
+        Badge {
+            text: root.step.outcome_label;
+            tint: root.step.outcome == JavaStepOutcome.hit ? Theme.state-success
+                : root.step.outcome == JavaStepOutcome.failed ? Theme.state-danger
+                : Theme.fg-secondary;
+        }
+        UiText {
+            role: TextRole.caption;
+            text: root.step.detail;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+    }
+}
+
+component VendorRow inherits Rectangle {
+    in property <UiJavaVendor> data;
+    callback install();
+
+    height: 56px;
+    background: vendor-touch.has-hover ? Theme.bg-hover : transparent;
+
+    HorizontalLayout {
+        padding-left: Metrics.gap-3;
+        padding-right: Metrics.gap-3;
+        spacing: Metrics.gap-2;
+
+        UiText {
+            role: TextRole.bodyStrong;
+            text: root.data.rank + ". " + root.data.display;
+            width: 170px;
+        }
+        if root.data.installed : Badge { text: "已装"; tint: Theme.state-success; }
+        UiText {
+            role: TextRole.caption;
+            text: "Java " + root.data.majors;
+            width: 96px;
+        }
+        UiText {
+            role: TextRole.caption;
+            text: root.data.sources;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        MetroButton {
+            kind: ButtonKind.standard;
+            text: "安装此家";
+            button-height: 26px;
+            enabled: !PageState.java-busy;
+            clicked => { root.install(); }
+        }
+    }
+
+    vendor-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.install(); }
+    }
+}
+
+export component JavaPanel inherits Rectangle {
+    background: Theme.bg-canvas;
+
+    VerticalLayout {
+        // 顶栏：地区 / 优先级来源 / 目标大版本 / 一键按回退链安装
+        Rectangle {
+            height: 56px;
+            background: Theme.bg-canvas;
+
+            HorizontalLayout {
+                padding-left: Metrics.gap-4;
+                padding-right: Metrics.gap-4;
+                spacing: Metrics.gap-3;
+
+                UiText {
+                    role: TextRole.subtitle;
+                    text: "Java 运行时";
+                    width: 110px;
+                }
+                UiText {
+                    role: TextRole.caption;
+                    text: "地区 " + PageState.java-region + " · 优先级 " + PageState.java-priority-source
+                        + " · 目标 Java " + PageState.java-target-major;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                MetroButton {
+                    kind: ButtonKind.accent;
+                    text: PageState.java-busy ? "安装中…" : "按回退链安装";
+                    button-height: 28px;
+                    enabled: !PageState.java-busy;
+                    clicked => { PageState.java-install(""); }
+                }
+            }
+        }
+
+        UiText {
+            x: Metrics.gap-4;
+            role: TextRole.caption;
+            text: PageState.java-order;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        if PageState.java-message != "" : Rectangle {
+            height: 30px;
+            background: Theme.accent-soft;
+            UiText {
+                x: Metrics.gap-4;
+                role: TextRole.caption;
+                text: PageState.java-message;
+                overflow: elide;
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.stroke; }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                padding-bottom: Metrics.gap-4;
+
+                // 回退链
+                UiText {
+                    x: Metrics.gap-4;
+                    role: TextRole.bodyStrong;
+                    text: "回退链";
+                }
+                for step in PageState.java-chain : ChainStep { step: step; }
+
+                UiText {
+                    x: Metrics.gap-4;
+                    role: TextRole.bodyStrong;
+                    text: "四家发行版";
+                }
+                for vendor in PageState.java-vendors : VendorRow {
+                    data: vendor;
+                    install => { PageState.java-install(vendor.id); }
+                }
+
+                UiText {
+                    x: Metrics.gap-4;
+                    role: TextRole.bodyStrong;
+                    text: "本地已发现";
+                }
+                if PageState.java-runtimes.length == 0 : UiText {
+                    x: Metrics.gap-4;
+                    role: TextRole.caption;
+                    text: "还没有探测到 Java：点上面的「按回退链安装」装一个托管 JDK。";
+                }
+                for runtime in PageState.java-runtimes : Rectangle {
+                    height: 24px;
+                    HorizontalLayout {
+                        padding-left: Metrics.gap-4;
+                        spacing: Metrics.gap-2;
+                        UiText { role: TextRole.caption; text: "Java " + runtime.version; width: 120px; }
+                        UiText { role: TextRole.caption; text: runtime.vendor; width: 96px; }
+                        UiText { role: TextRole.caption; text: runtime.origin; width: 80px; }
+                        UiText { role: TextRole.caption; text: runtime.binary; horizontal-stretch: 1; overflow: elide; }
+                    }
+                }
+            }
+        }
+    }
+}

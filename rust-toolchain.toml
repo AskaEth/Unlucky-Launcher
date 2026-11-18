@@ -1,0 +1,6 @@
+[toolchain]
+# 全仓统一 stable，不在仓库内钉死具体小版本（CI 与本地同样走 stable 解析）。
+# 各平台（Win10+ / macOS / Linux）共用本文件，不按平台另起工具链。
+channel = "stable"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

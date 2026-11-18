@@ -1,0 +1,21 @@
+{
+  "data": {
+    "id": 394468,
+    "name": "Sodium",
+    "slug": "sodium",
+    "summary": "Modern rendering engine and client-side optimization mod",
+    "authors": [{ "name": "jellysquid3" }],
+    "downloadCount": 42123456,
+    "dateModified": "2026-02-03T10:11:12Z",
+    "latestFilesIndexes": [
+      {
+        "gameVersion": "1.21.1",
+        "fileId": 5512345,
+        "filename": "sodium-fabric-0.6.0+mc1.21.1.jar",
+        "releaseType": 1,
+        "modLoader": 4
+      }
+    ],
+    "logo": { "url": "https://media.forgecdn.net/avatars/sodium.png" }
+  }
+}

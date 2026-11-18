@@ -1,0 +1,120 @@
+{
+  "note": "M249 check_gpu_shot.py --self-test 的向量。log = synth_log 的关键字覆盖（缺省键取函数默认值；null = 该行不出现；no_size_line = 只省掉 [shot] WxH 那一行；multiline_selected / empty_selected = `Selected: AdapterInfo {` 的字段换了形状；extra_shot_renderer = 再追加一行异种 renderer 的 [shot] 行）；png = content/flat/truncated/null（null = 不写文件）；mode = evidence/refuse；expect_fail = **期望的失败判据清单（逐条对，多一条少一条都算自测失败）**——判据被关掉或被别的东西掩盖，都在这里现形。PNG 由 check_screenshot.encode_png 现造，不进仓库。",
+  "size": [200, 120],
+  "cases": [
+    {
+      "label": "基线：wgpu + DiscreteGpu + 有内容 PNG",
+      "png": "content",
+      "expect_fail": []
+    },
+    {
+      "label": "基线：IntegratedGpu 也算硬件（与 probe.rs 同口径）",
+      "log": { "device_type": "IntegratedGpu" },
+      "png": "content",
+      "expect_fail": []
+    },
+    {
+      "label": "变异靶子：renderer=wgpu 但 Selected 是 Cpu（WARP）",
+      "log": { "device_type": "Cpu" },
+      "png": "content",
+      "expect_fail": ["Selected: AdapterInfo 的 device_type 不是 Cpu/Other"]
+    },
+    {
+      "label": "变异靶子：Selected 是 Other（Gl 兼容层）",
+      "log": { "device_type": "Other" },
+      "png": "content",
+      "expect_fail": ["Selected: AdapterInfo 的 device_type 不是 Cpu/Other"]
+    },
+    {
+      "label": "变异靶子：Selected 换成多行 Debug（字段不在 { 那一行）",
+      "log": { "multiline_selected": true },
+      "png": "content",
+      "expect_fail": ["Selected: AdapterInfo 的 device_type 不是 Cpu/Other"]
+    },
+    {
+      "label": "变异靶子：`Selected: AdapterInfo {` 空体（字段全丢）",
+      "log": { "device_type": null, "empty_selected": true },
+      "png": "content",
+      "expect_fail": ["Selected: AdapterInfo 的 device_type 不是 Cpu/Other"]
+    },
+    {
+      "label": "变异靶子：删掉 [shot] renderer 行（只剩 Selected + backend）",
+      "log": { "renderer": null },
+      "png": "content",
+      "expect_fail": ["截图行 renderer=wgpu"]
+    },
+    {
+      "label": "变异靶子：日志里混入第二种 renderer（CPU 那次 >> 拼进来）",
+      "log": { "extra_shot_renderer": "tiny-skia" },
+      "png": "content",
+      "expect_fail": ["截图行 renderer=wgpu"]
+    },
+    {
+      "label": "回归：CPU 档出的图（renderer=tiny-skia）",
+      "log": { "renderer": "tiny-skia", "device_type": null, "backend": "final=tiny-skia result=started" },
+      "png": "content",
+      "expect_fail": ["截图行 renderer=wgpu", "Selected: AdapterInfo 的 device_type 不是 Cpu/Other", "后端结论行 final=wgpu result=started"]
+    },
+    {
+      "label": "回归：没有 Selected 行（wgpu 没建成设备）",
+      "log": { "device_type": null },
+      "png": "content",
+      "expect_fail": ["Selected: AdapterInfo 的 device_type 不是 Cpu/Other"]
+    },
+    {
+      "label": "回归：后端结论行是失败",
+      "log": { "backend": "final=none result=failed via=refuse" },
+      "png": "content",
+      "expect_fail": ["后端结论行 final=wgpu result=started"]
+    },
+    {
+      "label": "回归：完全空白帧（全白 PNG）",
+      "png": "flat",
+      "expect_fail": ["PNG 不是空白帧"]
+    },
+    {
+      "label": "回归：PNG 尺寸与日志 [shot] 不符",
+      "png": "content",
+      "png_size": [640, 480],
+      "expect_fail": ["PNG 宽高 = 日志 [shot] 的宽高"]
+    },
+    {
+      "label": "回归：PNG 根本不存在",
+      "png": null,
+      "expect_fail": ["PNG 能解码且非空", "PNG 宽高 = 日志 [shot] 的宽高", "PNG 不是空白帧"]
+    },
+    {
+      "label": "回归：PNG 半截（签名对、字节不够）",
+      "png": "truncated",
+      "expect_fail": ["PNG 能解码且非空", "PNG 宽高 = 日志 [shot] 的宽高", "PNG 不是空白帧"]
+    },
+    {
+      "label": "负例基线：via=refuse + 无出图行 + 无 PNG",
+      "log": { "renderer": null, "device_type": null, "no_size_line": true, "backend": "final=none result=failed via=refuse" },
+      "png": null,
+      "mode": "refuse",
+      "expect_fail": []
+    },
+    {
+      "label": "负例回归：拒绝日志旁边却躺着一张 PNG",
+      "log": { "renderer": null, "device_type": null, "no_size_line": true, "backend": "final=none result=failed via=refuse" },
+      "png": "content",
+      "mode": "refuse",
+      "expect_fail": ["目标 PNG 不存在（拒绝出图就该一张都没有）"]
+    },
+    {
+      "label": "负例回归：CPU 档日志不是「拒绝」（via 缺）",
+      "log": { "renderer": "tiny-skia", "device_type": null, "backend": "final=tiny-skia result=started" },
+      "png": null,
+      "mode": "refuse",
+      "expect_fail": ["后端结论行 via=refuse", "没有出图行（[shot] 尺寸 + renderer 都不该有）"]
+    },
+    {
+      "label": "负例回归：final=… via=refuse 却仍有出图行（自相矛盾）",
+      "log": { "backend": "final=none result=failed via=refuse" },
+      "png": "content",
+      "mode": "refuse",
+      "expect_fail": ["没有出图行（[shot] 尺寸 + renderer 都不该有）", "目标 PNG 不存在（拒绝出图就该一张都没有）"]
+    }
+  ]
+}

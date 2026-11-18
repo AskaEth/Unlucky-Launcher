@@ -1,0 +1,210 @@
+name: Dev Guards
+
+# 日常线门禁（M133）。
+#
+# 为什么需要这个文件：本仓日常开发线是 `dev`，日常合并**不走 PR**（见 DevDocs/AGENTS.md §8 双仓纪律：
+# Gitea `dev` = 日常线）。而 ci.yml 与 guards.yml 只挂在 `push: branches: [main]` + `pull_request` 上
+# ⇒ fmt / clippy / 文件行数≤400 / 三条零依赖守门在**日常线上一次都没跑过**。第一个可见后果：
+# `packaging/README.md` 涨到 401 行、超全仓红线无人拦，直到文档普查才被发现（M131 才修回 398）。
+# 「门禁存在但日常线上永不运行」= 空跑的门禁，长期等于没有。
+#
+# 口径：**只补「快、且坏了会静默腐化」的那几道**，且不复制守门脚本：
+#   - `guards` 作业直接 `uses: ./.github/workflows/guards.yml` —— 六道守门（core-no-ui /
+#     presenter-no-ui / design-zero-dep / unsafe-scope / file-size / licenses）跑的是与 main 同一份脚本，
+#     dev 与 main 的判据永远同源。main / PR / dispatch 的触发与作业一个字没动。
+#   - `fmt` / `clippy` 在本文件里各写一份：ci.yml 的作业背后挂着 build / test / runtime-smoke 整条矩阵，
+#     整份复用等于把 dev 的成本翻倍；这两条命令与 ci.yml 逐字一致，方便对照与同步。
+#
+# 刻意**不上** dev 的（判断依据见 M133 报告，这里只记结论）：
+#   - 全量 `cargo test`：`clippy --all-targets` 已经把测试**代码**类型检查过一遍（「测试编译不过了」
+#     这类静默腐化会被它抓到），而「断言暂时红了」在施工中间态是常态、不是腐化；test 是 2 个 OS ×
+#     全量编译+运行，留给 main 与发布前的最终门更划算。
+#   - build release / runtime-smoke：它们是「能不能发」的门，dev 每次 push 跑一遍换不到新信息。
+#
+# 成本控制（dev push 很频繁，这是硬要求）：
+#   1. `concurrency` **只排队、不取消**（M364）：取消掉的 run 既不是绿也不是红，是一个**没有结论**的状态，
+#      而本文件的全部使命就是出结论 —— 「省 runner 分钟」不能拿「永远出不了结论」去换。账在这里结：
+#      成本靠「同一次推送只跑一次」+「只碰文档跳过编译」，不靠「掐掉上一次」。
+#   2. clippy 只在「这次推送碰过 Rust 侧文件」时跑：只改文档（*.md / LICENSE / NOTICE / .gitignore）
+#      的推送跳过编译。判据**保守**——非 push、base 不可解析（force-push / 首次推送）、diff 取不到、
+#      出现任何不在白名单里的路径，一律照跑：宁可多跑一次，不许假绿。
+#   刻意**不**用 `on.push.paths` 过滤整个工作流：file-size 正是要在「只改文档」的推送里跑的那道门
+#   （README 401 行就是这么漏的），整条过滤掉等于自废武功。
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# M364：这里原来是 `group: dev-guards-${{ github.ref }}` + `cancel-in-progress: true` ——「连推三次只留
+# 最后一次，被取消的旧运行基本不计费」是账面上最省的写法，但它让**每一次 run 都在得出判据之前就被记成
+# cancelled**：门禁天天被触发，结论一次都没落地过。
+# 实测（Gitea 匿名 status API，`dev` 分支，2026-11-18 07:40 止）：
+#   ① 最近 12 个「有 status 的」提交、13 个 job context（Dev Guards 4 + Guards 6 + GPU evidence 3）
+#      **无一例外**终态是 `failure / Canceled after 0s`：零 success、零带判据的 failure。
+#   ② 每一次的取消时刻与**下一次 push 到达**逐对对齐（6~22 s 内），没有第二个机制能解释这个巧合：
+#      3361758（22:47 推）→ 23:06:42 被取消（= 4676185 的 23:06:36 推送）；4676185 → 01:08:43
+#      （= 4c192ea 01:08:37）；4c192ea → 03:35:07；922969b → 05:09:50；42d3c4e → 05:23:28；
+#      ea6dbf6 → 07:23:30（= 5deec39 的 07:23:21 推送）。
+#   ⇒ 只要 `dev` 还在推，上一次的 run 就一定在「还没跑完」的时候被下一次掐掉。这是排队结构决定的必然，
+#     不是概率事件：**门禁的结论只在「推完之后很久没人推」时才可能出现**，而本仓没有那种时候。
+# 选型：**改成排队**（`cancel-in-progress: false`）。方向性要看清它到底取消谁 —— GitHub 文档
+# 「Control the concurrency of workflows and jobs」原文：*"When a concurrent job or workflow is queued,
+# if another job or workflow using the same concurrency group in the repository is in progress, the
+# queued job or workflow will be pending. By default, any existing pending job or workflow in the same
+# concurrency group will be canceled and the new queued job or workflow will take its place."*
+#   ⇒ `cancel-in-progress: false` 的真实语义 = 「**正在跑**的那一次掐不动；**排队位只有一个**，新来的
+#      顶掉还排在队里的旧人」。最新那次必然会被跑起来（这正是我们要的），被顶掉的是「还没轮到开跑」的
+#      旧提交 —— 那本来就该省。`cancel-in-progress: true` 则是多杀一刀：连在跑的那一次一起取消。
+#      今天所有 0s / 半截消失，全在那一刀上。
+#   ⇒ 因此**不**选第三种写法 `queue: max`（同一份文档：最多 100 个排队位、FIFO）：那才是真正的 N×T
+#      等待，而且旧提交也要烧满一次 runner 分钟。默认的 `queue: single` 正合需要，不写就是它，别画蛇添足。
+# 本仓已有同一先例：`release.yml:69-71` 也是 `cancel-in-progress: false`（发一半的版本比慢更坏）；
+# 门禁与发布在这里同一个道理 —— 慢是成本，没有结论是失效。
+# 代价（明写，别当成免费）：
+#   - 最坏等待 = 「当前正在跑的那一次」的剩余墙钟，上界就是单次 run 墙钟 T，**不随推送次数增长**
+#     （排队位只有一个，攒不出 N×T）。T 由 clippy 那一段决定：ubuntu + rust-cache，本仓冷编一次
+#     10~15 分钟，取上界 ⇒ 最坏多等 ~15 分钟。
+#   - 真正的成本是 **runner 分钟**：改前被取消的 run 基本不计费，改后每一次都真跑到底。dev 实测推送
+#     间隔 1.5~2 小时（22:45 / 23:06 / 01:08 / 03:35 / 05:09 / 05:23 / 07:23），一天 10~15 次推送
+#     ⇒ 一天多花 2.5~4 小时自托管 runner 时间；买的是「每天 10~15 个真实结论」。
+# group 里带 event_name（与 ci.yml:74-76 同一先例）：`workflow_dispatch` 的 ref 也是同一个分支，混在
+# 同一列里，塔手动验一次就得排在 push 队列后面等；分开之后 dispatch 自成一行，两边互不顶。
+# ⚠ 本开关只保证「不再被下一次推送掐掉」，**不保证「跑得完」**：M364 那些 run 的 job 是 `0s` 执行 ——
+# 一次都没被 runner 取走过（`dev` tip 推送后 19 分钟仍 `Waiting to run`；`main` 上唯一那个提交 12:08
+# 建 run、28 小时后才被取消，全程没人跑）。而 `main` 那次是**24 个 job 在同一个三秒窗口里被一起抹掉**：
+# 可复核的取法 —— Gitea 匿名 status API `/commits/0522a41a5/statuses?limit=100`，全量 50 条 =
+# **6 个 workflow / 25 个 job context**，其中 **24 条 `failure / Canceled after 0s` 落在
+# 15:46:40–15:46:42（3 秒窗口，不是同一秒）**，另 24 条此前是 `Waiting to run`（12:08:09–12:08:22）、
+# 2 条 `Skipped`。这里只写这一次复算的结果，不写「九个 workflow / 26 个 job 同一秒」那种整数印象 ——
+# 写死的整数必然随数据漂。其中 `guards.yml` 根本没有 `concurrency` 块 ⇒ 该实例上至少还有第二种
+# 「擦除」机制，或者**根本没有 runner 在消费任务**。那是另一个问题（M364 已单独上报），
+# **本文件不做任何「看起来绿了」的兜底**：
+# 排队 + 不取消，只是把「没人跑」从 `Canceled` 改回它本来的样子（`Waiting to run`）。
+concurrency:
+  group: dev-guards-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# 上界（M366）：上面那段代价分析里的「最坏等待 ≈ T」当时只是**估计** —— 本文件与两个被调用的
+# reusable workflow 上一条 `timeout-minutes` 都没有。`cancel-in-progress: false` 之后，一个卡在
+# `in_progress` 的 run 会占住**唯一**排队位，直到平台默认的 job 上限（360 分钟；先例见 ci.yml 的
+# runtime-smoke 30 / macos 探针 30 / update-e2e 45），那段时间里后续推送全是 `pending` —— 正是本
+# 文件要消灭的「没有结论」。M366 把这个上界从估计变成机制。
+#
+# ⚠ 两个 `uses:` 调用（`guards` / `gpu-evidence`）**在本文件里加不了**，不是漏了：GitHub 的「调用
+# reusable workflow 的 job 支持哪些键」是一张显式白名单，`timeout-minutes` **不在其中**
+# （docs.github.com → Reusing workflow configurations → "Supported keywords for jobs that call a
+# reusable workflow"；SchemaStore `github-workflow.json` 的 `reusableWorkflowCallJob` 同样没有该键，
+# 而 `normalJob` 有）。硬加 = `Unexpected value`：整份 workflow 不加载、一次 run 都不建，比「没有
+# 结论」更彻底。所以上界落在**被调用文件自己的 job 上**（每个数值带依据与倍数，见那两个文件）：
+#   - `guards.yml` 六个 job：licenses 30 / core-no-ui 20 / presenter-no-ui 20 / design-zero-dep 20 /
+#     file-size 10 / unsafe-scope 10。六个 job 并行 ⇒ 整份 reusable 的墙钟上界 ≈ 最慢那个 + 排队偏移。
+#   - `gpu-evidence.yml` 三个 job：selftest 15 / probe 10 / evidence 15（`probe → evidence` 是串联的）
+#     ⇒ ≈25 分钟。
+# ⇒ 本文件一次 run 的 T ≈ **最慢的那个 job（clippy 45）+ 调度偏移**，即一小时以内，不再是 6 小时。
+#
+# 数值怎么来的 —— **全部是估计，不是实测**：本仓 runner 从未消费过任务（M364 那些 run 的 job 全是
+# `0s` / `Waiting to run`），一行历史执行时长都引不到。首次真跑后按实测校准，别把这里的数当实测：
+#   - `fmt` = 15：checkout + 装 rustfmt + `cargo fmt --all --check`（只解析、不编译，本机秒级），
+#     最坏 ≈1.5 分钟 ⇒ ~10 倍余量。
+#   - `clippy` = 45：apt 装六个图形栈 dev 包 + 冷缓存下 `clippy --workspace --all-targets`（M364 估
+#     10~15 分钟）⇒ 最坏 ≈17 分钟 ⇒ ~2.6 倍。取 45 不取 30 是为了**不比先例更紧**：`update-e2e.yml` 的
+#     `update-e2e`（release + fat LTO，比 clippy 更贵）就是 45（M368 才从 `ci.yml` 抽出来，故不写行号）。
+# 方向性：**宁可宽不可紧**。一次误杀 = 门禁假红，假红会被当噪音忽略，比「没有上界」更坏；而两个被
+# 调用的文件同时被 `main` 的直接触发使用，这些上界不是 dev 专属，误杀的代价是双份的。
+
+jobs:
+  # 六道守门原样来自 guards.yml（那边加了 `workflow_call:` 触发，纯新增）。本文件不重写它们的脚本：
+  # unsafe-scope 的词法器一旦有第二份副本，就会出现「dev 绿、main 红」的双真相。
+  guards:
+    name: 架构与合规守门（同 main 口径）
+    uses: ./.github/workflows/guards.yml
+
+  # GPU 证据门禁（M253 r1 P2-1）：与 main **同一份** workflow，理由同上 —— 判据只能有一份。
+  # dev 上 `evidence` 照样显式跳过（无 GPU、无产物，见该文件的 probe job），所以实际拿到的是
+  # `selftest` 那一半：19 条向量 + 三个退出码 0/1/2 + 接线自检，成本就是一次 python 自测。
+  # 不另加「只跑自测」的开关：那会给这道门禁多开一个「可以合法关掉真判据」的旋钮。
+  gpu-evidence:
+    name: GPU 证据门禁（同 main 口径；无 GPU 只跑自测）
+    uses: ./.github/workflows/gpu-evidence.yml
+
+  fmt:
+    name: fmt (rustfmt --check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # 只跑 ubuntu：clippy 的判据是类型层 lint，跨平台差异极少（Windows 专属行为由 main/PR 上的
+  # windows-latest 槽位与 test 里的像素守门兜）；两个 OS 都上会把 dev 的编译成本直接翻倍。
+  clippy:
+    name: clippy (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 要 diff 出「这次推了哪些文件」就得有 base commit；浅 clone 会让下面的判据退化成
+          # 「一律照跑」（保守，但不再省成本），所以这里取全历史。
+          fetch-depth: 0
+      - name: 本次推送是否碰过 Rust 侧文件（只碰文档则跳过编译）
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          run=yes
+          note="照跑：默认（未进入可判定的 push 分支）"
+          if [ "$EVENT" != "push" ]; then
+            note="照跑：非 push 事件（手动 dispatch）没有可信 diff"
+          elif [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            note="照跑：base 为首次推送（before 全 0）"
+          elif ! git rev-parse --verify -q "${BEFORE}^{commit}" >/dev/null 2>&1; then
+            note="照跑：base commit 不可解析（force-push / 历史被改写）"
+          else
+            changed=$(git diff --name-only "$BEFORE" "$SHA" 2>/dev/null || true)
+            if [ -z "$changed" ]; then
+              note="照跑：diff 为空（可能是增量不可得）"
+            else
+              # 白名单判定：只有「全部改动都落在这些非 Rust 路径上」才跳过编译。
+              # 反向写法（黑名单 .rs）更省事，但漏一个路径就等于漏一次编译检查。
+              others=$(printf '%s\n' "$changed" \
+                | grep -vE '\.md$' \
+                | grep -vxE 'LICENSE|NOTICE|\.gitignore' || true)
+              if [ -z "$others" ]; then
+                run=no
+                note="跳过：本次只碰文档类路径 —— $(printf '%s ' $changed)"
+              else
+                note="照跑：本次改动了非文档路径 —— $(printf '%s ' $others)"
+              fi
+            fi
+          fi
+          echo "$note"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - name: Linux 图形栈构建依赖（winit / wgpu 编译期需要）
+        if: steps.scope.outputs.run == 'yes'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libwayland-dev libxcb1-dev
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.scope.outputs.run == 'yes'
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        if: steps.scope.outputs.run == 'yes'
+      # 与 ci.yml 的 clippy 作业逐字一致（`--workspace` 不含已退役的 `unlucky-app`，见 M118）。
+      - name: cargo clippy --workspace --all-targets -D warnings
+        if: steps.scope.outputs.run == 'yes'
+        run: cargo clippy --workspace --all-targets -- -D warnings

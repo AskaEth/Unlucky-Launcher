@@ -1,0 +1,1 @@
+[12:01:14] [main/ERROR]: java.lang.IllegalArgumentException: 512 outside of image bounds 256
