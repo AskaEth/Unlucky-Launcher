@@ -1,0 +1,1 @@
+[12:00:36] [main/ERROR]: java.io.UncheckedIOException: java.io.IOException: Invalid paths argument, contained no existing paths: [/home/user/.minecraft/libraries/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0-client.jar]

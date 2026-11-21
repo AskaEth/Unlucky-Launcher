@@ -1,0 +1,260 @@
+// G1 实例页（09 §2 P0·G1）：顶栏（搜索/新建/视图切换/磁贴尺寸）+ 磁贴网格 + 运行中迷你状态条。
+// 网格用 GridLayout：列数由 Rust 按磁贴尺寸算好（小 6 / 中 4 / 大 3），row/col 随 UiTile 一起给。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiTile, InstanceView, TileSize, RuntimePhase } from "../models.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+import { MetroButton, ButtonKind } from "../widgets/button.slint";
+import { SearchField, SegmentedControl } from "../widgets/inputs.slint";
+import { InstanceTile } from "../components/tile.slint";
+import { ListView } from "std-widgets.slint";
+
+// 列表视图的一行（与磁贴共用同一份 UiTile 数据）
+component InstanceRow inherits Rectangle {
+    in property <UiTile> data;
+    callback open();
+    callback launch();
+
+    height: Metrics.row-height + 8px;
+    background: row-touch.has-hover ? Theme.bg-hover : transparent;
+
+    // 行点击区先声明，按钮后声明 → 按钮命中优先
+    row-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.open(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Metrics.gap-3;
+        padding-right: Metrics.gap-3;
+        spacing: Metrics.gap-3;
+
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: Metrics.radius-sm;
+            background: root.data.hue;
+
+            UiText {
+                text: root.data.initial;
+                font-size: 13px;
+                font-weight: 600;
+                color: Theme.fg-on-accent;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        UiText {
+            role: TextRole.body;
+            text: root.data.name;
+            horizontal-stretch: 1;
+        }
+        UiText {
+            role: TextRole.caption;
+            text: root.data.mc_version;
+            width: 88px;
+        }
+        UiText {
+            role: TextRole.caption;
+            text: root.data.loader_label;
+            width: 88px;
+        }
+        UiText {
+            role: TextRole.caption;
+            text: root.data.last_played;
+            width: 120px;
+        }
+
+        MetroButton {
+            kind: ButtonKind.subtle;
+            icon: IconKind.play;
+            icon-only: true;
+            enabled: root.data.phase == RuntimePhase.idle
+                || root.data.phase == RuntimePhase.failed;
+            clicked => { root.launch(); }
+        }
+    }
+}
+
+export component InstancesPage inherits Rectangle {
+    in property <[UiTile]> tiles;
+    in property <[UiTile]> running;
+    in property <InstanceView> view: InstanceView.tiles;
+    in-out property <TileSize> tile-size: TileSize.medium;
+    in-out property <string> query: "";
+
+    callback launch(string);
+    callback configure(string);
+    callback stop(string);
+    callback open(string);
+    callback new-instance();
+    callback view-changed(InstanceView);
+    callback tile-size-changed(TileSize);
+    callback query-changed(string);
+
+    background: Theme.bg-canvas;
+
+    VerticalLayout {
+        // ── 顶栏 ────────────────────────────────────────────────
+        Rectangle {
+            height: Metrics.page-header-height;
+            background: Theme.bg-surface;
+
+            HorizontalLayout {
+                padding-left: Metrics.gap-4;
+                padding-right: Metrics.gap-4;
+                spacing: Metrics.gap-2;
+
+                UiText {
+                    role: TextRole.subtitle;
+                    text: "实例";
+                    width: 72px;
+                }
+
+                SearchField {
+                    width: 240px;
+                    placeholder: "搜索实例";
+                    text <=> root.query;
+                    edited(t) => { root.query-changed(t); }
+                }
+
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+
+                SegmentedControl {
+                    width: 120px;
+                    options: ["磁贴", "列表"];
+                    selected: root.view == InstanceView.tiles ? 0 : 1;
+                    changed(i) => {
+                        root.view-changed(i == 0 ? InstanceView.tiles : InstanceView.list);
+                    }
+                }
+
+                SegmentedControl {
+                    width: 132px;
+                    visible: root.view == InstanceView.tiles;
+                    options: ["小", "中", "大"];
+                    selected: root.tile-size == TileSize.small ? 0
+                        : root.tile-size == TileSize.large ? 2 : 1;
+                    changed(i) => {
+                        root.tile-size-changed(
+                            i == 0 ? TileSize.small : i == 2 ? TileSize.large : TileSize.medium);
+                    }
+                }
+
+                MetroButton {
+                    kind: ButtonKind.accent;
+                    text: "新建实例";
+                    show-icon: true;
+                    icon: IconKind.plus;
+                    clicked => { root.new-instance(); }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.stroke; }
+
+        // ── 运行中迷你状态条 ──────────────────────────────────────
+        Rectangle {
+            height: Metrics.running-strip-height;
+            visible: root.running.length > 0;
+            background: Theme.state-info-soft;
+
+            HorizontalLayout {
+                padding-left: Metrics.gap-4;
+                padding-right: Metrics.gap-4;
+                spacing: Metrics.gap-2;
+
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: Theme.state-success;
+                }
+                UiText {
+                    role: TextRole.caption;
+                    text: root.running.length + " 个实例运行中";
+                    color: Theme.state-success;
+                    horizontal-stretch: 1;
+                }
+                for r in root.running : UiText {
+                    role: TextRole.caption;
+                    text: r.name;
+                }
+            }
+        }
+
+        // ── 磁贴网格 ─────────────────────────────────────────────
+        body := Flickable {
+            vertical-stretch: 1;
+            visible: root.view == InstanceView.tiles && root.tiles.length > 0;
+            content-width: self.width;
+            content-height: grid-content.height;
+
+            grid-content := Rectangle {
+                width: body.width;
+                height: grid.preferred-height;
+                background: transparent;
+
+                grid := GridLayout {
+                    padding: Metrics.gap-4;
+                    spacing: Metrics.gap-3;
+
+                    for t in root.tiles : InstanceTile {
+                        row: t.row;
+                        col: t.col;
+                        data: t;
+                        compact: root.tile-size == TileSize.small;
+                        open => { root.open(t.id); }
+                        launch => { root.launch(t.id); }
+                        configure => { root.configure(t.id); }
+                        stop => { root.stop(t.id); }
+                    }
+                }
+            }
+        }
+
+        // ── 列表视图 ─────────────────────────────────────────────
+        ListView {
+            vertical-stretch: 1;
+            visible: root.view == InstanceView.list && root.tiles.length > 0;
+
+            for t in root.tiles : InstanceRow {
+                data: t;
+                open => { root.open(t.id); }
+                launch => { root.launch(t.id); }
+            }
+        }
+
+        // ── 空态 ────────────────────────────────────────────────
+        VerticalLayout {
+            vertical-stretch: 1;
+            visible: root.tiles.length == 0;
+            alignment: center;
+            spacing: Metrics.gap-3;
+
+            UiText {
+                role: TextRole.title;
+                text: "还没有实例";
+                horizontal-alignment: center;
+                color: Theme.fg-secondary;
+            }
+            UiText {
+                role: TextRole.caption;
+                text: "新建一个实例，或者先去下载页装个版本";
+                horizontal-alignment: center;
+            }
+            HorizontalLayout {
+                alignment: center;
+                MetroButton {
+                    kind: ButtonKind.accent;
+                    text: "新建实例";
+                    show-icon: true;
+                    icon: IconKind.plus;
+                    clicked => { root.new-instance(); }
+                }
+            }
+        }
+    }
+}

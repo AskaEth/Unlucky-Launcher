@@ -1,0 +1,54 @@
+# cargo-deny 配置（D15：Apache-2.0 主干，GPL 依赖不得进主干）。
+# CI 侧的安装与执行见 .github/workflows/guards.yml（licenses job）。
+# 参考：https://embarkstudios.github.io/cargo-deny/  ·  决策：DevDocs/PlanDoc/00-decision-log.md D15
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# 注意：cargo-deny 0.20 移除了 severity-threshold（见 PR #611），严重度改由
+# [advisories] 的 ignore 清单 + 后续安全轮次单独把关；这里只做「yanked 依赖禁止」。
+
+[licenses]
+version = 2
+# 白名单：Apache-2.0 / MIT / BSD / Zlib 系（用户要求）＋ 实际依赖树需要的宽松许可。
+# GPL / AGPL / LGPL / SSPL 一律不在列 → 直接 fail，不进主干。
+#
+# 补充项及来源（均为宽松、与 Apache-2.0 兼容，不改变「拒绝 copyleft」的立场）：
+# - BSL-1.0（Boost）：clipboard-win / error-code（winit/arboard 的 Windows 依赖）
+# - Unlicense：ksni（Slint 系统托盘）
+# - CDLA-Permissive-2.0：webpki-roots（Mozilla CA 根证书数据）
+# - Unicode-3.0：unicode-ident；CC0-1.0 / MIT-0 / ISC：生态常见宽松项
+confidence-threshold = 0.92
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "BSL-1.0",
+    "ISC",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    # Slint（D2）走 Royalty-Free 2.0 轨道：其 crates 的 SPDX 表达为
+    # "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0"，
+    # 允许多选一即通过；这里显式放行 RF 分支，GPL 分支仍是拒绝的。
+    # 主义务：关于页放 AboutSlint 部件（见 NOTICE 与 DevDocs/PlanDoc/01c-native-gui-options.md §8）。
+    "LicenseRef-Slint-Royalty-free-2.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

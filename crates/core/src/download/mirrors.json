@@ -1,0 +1,181 @@
+{
+  "version": 3,
+  "notes": [
+    "M225（规则修订，version 仍为 3）：① bmclapi-liteloader 关闭——2026-11-10 实测镜像侧全 404，LiteLoader 走官方直连；② 新增 bmclapi-maven-central，把 repo1.maven.org 的库接到 bmclapi 的 /maven（实测逐字节一致）；③ 快照仓 repo.mumfrey.com 无任何镜像，登记为「不加速」。**不升 version 的原因**：v4 会把 `download/jdk_sources.rs::builtin_table_is_v3_with_all_four_source_families` 与 `tests/game/java_vendor_chain.rs`（`mirror_table_v3_registers_all_four_source_families`）里的 `version == 3` pin 弄红，升版得同时改那两处——本轮只修规则，version 的世代标记留给一次专门的升版。",
+    "v3（D23/M36）：adoptium 表收敛到清华 TUNA 一家（其余院校实测 404，登记保留但 enabled=false）；新增 oracle_openjdk / microsoft_openjdk / zulu 三张表，供 game::java 的三发行版回退链使用。",
+    "华为云 / 腾讯云 / 阿里云没有 Adoptium 镜像：华为云门户对任意不存在的路径都回 200 + 12KB HTML（假阳性，M34 实测），腾讯云 /v1/source.js 与华为云 /v1/repositories 的权威清单里都没有 JDK 项。据此不再登记 adoptium.huaweicloud。",
+    "oracle_openjdk 的目录与文件名与 download.java.net 完全同构，但 hash 段（f2283984656d49d69e91c558476027ac）不可推导——候选 URL 只能来自对镜像目录页的解析，禁止拼装。",
+    "microsoft_openjdk 没有国内镜像，也没有 GitHub 资产（api.github.com 的 microsoft/openjdk releases 里 assets 全空）；唯一渠道是 aka.ms 模板 301 → download.visualstudio.microsoft.com（国内约 400 KB/s）。",
+    "zulu 的 API size 字段与真实字节数差 133 B，只能用于展示；校验一律用 sha256_hash。",
+    "LiteLoader 的 bmclapi 改写已关闭（bmclapi-liteloader.enabled=false，规则保留作形状留档）：2026-11-10 实探 curl -sS -L -o /dev/null -w '%{http_code} %{size_download}' —— 官方 https://dl.liteloader.com/versions/versions.json 200 / 49129 B、.../com/mumfrey/liteloader/1.7.10/liteloader-1.7.10_04.jar 200 / 533903 B；镜像侧（`apply()` 的真实产物：`from` 吃掉 `/versions` 后剩下 `/versions.json`）https://bmclapi2.bangbang93.com/maven/versions.json 404 / 9 B、/maven/com/mumfrey/liteloader/1.7.10/liteloader-1.7.10_04.jar 404 / 9 B、/maven/com/mumfrey/liteloader/{maven-metadata.xml,1.12.2-SNAPSHOT/maven-metadata.xml} 也是 404 / 9 B。（任务描述里的 `/maven/versions/versions.json` 也实测 404，但那条双段路径不是这条规则拼出来的，别照样抄。）引擎遇 404 会前进到官方（NotFound 不重试），所以留着这条只会让镜像优先用户每个文件白丢一次请求；官方不可达时更是直接失败。",
+    "bmclapi-maven-central 的依据：bmclapi 的 /maven 是真的 maven 代理（不止 libraries.minecraft.net）。2026-11-10 实测 —— 官方 repo1.maven.org 与镜像 200 且字节数一致、sha1 逐一相同：org/ow2/asm/asm-all/5.2 (247787 B)、com/google/code/gson/gson/2.10.1 (283367 B)、org/apache/logging/log4j/log4j-core/2.17.1 (1790452 B)，另有 asm 9.3 / asm-util 9.3 / jna 5.13.0 / annotations 24.0.1 字节数一致；不存在的坐标两侧都是 404（镜像回 9 B 纯文本，无「200 + HTML」假阳性）。注意两点：① 镜像还是上游的超集（org/spongepowered/mixin/0.8.5 在 Central 是 404、镜像 200 / 1089277 B），命中超集不影响校验（清单自带 sha1）；② 镜像对 Range 请求回 200 全量而非 206，所以这条规则只对不走分块的资源有实际意义（库文件是 Library，本来就 not prefers_chunked）。",
+    "快照仓不加速（不登记规则）：LiteLoader 的快照分支固定在 https://repo.mumfrey.com/content/repositories/snapshots/（M222 的 SNAPSHOT_REPO）。2026-11-10 实测官方 .../com/mumfrey/liteloader/1.12.2-SNAPSHOT/maven-metadata.xml 200 / 358 B，而候选镜像 bmclapi /maven 404 / 9 B、maven.aliyun.com/repository/central 404 / 689 B、repo.huaweicloud.com/repository/maven 404 / 394 B —— 没有任何镜像有 com/mumfrey，所以这条还是直连，别按「同族都该有镜像」的直觉加规则。",
+    "repo.maven.apache.org（Central 的官方别名）实测 200 / 247787 B，镜像同路径也 200 / 247787 B，但本仓库没有任何生产代码用这个 host（发行版库基址用的是 repo1.maven.org），所以不登记第二条规则——要用时再加，别为「可能有人用」提前铺。"
+  ],
+  "gh_proxies": [
+    {
+      "id": "gh-proxy",
+      "name": "gh-proxy.com",
+      "prefix": "https://gh-proxy.com/",
+      "enabled": true
+    }
+  ],
+  "adoptium": [
+    {
+      "id": "tuna",
+      "name": "清华 TUNA",
+      "base": "https://mirrors.tuna.tsinghua.edu.cn/Adoptium",
+      "enabled": true,
+      "latest_only": true
+    },
+    {
+      "id": "ustc",
+      "name": "中科大 USTC（无 Adoptium 目录树：只有 deb/rpm/releases，实测 404）",
+      "base": "https://mirrors.ustc.edu.cn/adoptium",
+      "enabled": false
+    },
+    {
+      "id": "sjtu",
+      "name": "上交 SJTU（无 Adoptium 目录树，实测 404）",
+      "base": "https://mirror.sjtu.edu.cn/adoptium",
+      "enabled": false
+    },
+    {
+      "id": "bfsu",
+      "name": "北外 BFSU（无 Adoptium 目录树，实测 404）",
+      "base": "https://mirrors.bfsu.edu.cn/Adoptium",
+      "enabled": false
+    },
+    {
+      "id": "nju",
+      "name": "南大 NJU（adoptium 路径实测 404；/openjdk/ 走 oracle_openjdk 表）",
+      "base": "https://mirror.nju.edu.cn/adoptium",
+      "enabled": false
+    },
+    {
+      "id": "zju",
+      "name": "浙大 ZJU（无 Adoptium 目录树，实测 404 搜索页）",
+      "base": "https://mirrors.zju.edu.cn/adoptium",
+      "enabled": false
+    },
+    {
+      "id": "163",
+      "name": "网易 163（无 Adoptium 目录树，实测 404 且 18 秒才回）",
+      "base": "https://mirrors.163.com/adoptium",
+      "enabled": false
+    }
+  ],
+  "oracle_openjdk": [
+    {
+      "id": "huawei",
+      "name": "华为云",
+      "base": "https://mirrors.huaweicloud.com/openjdk",
+      "enabled": true,
+      "speed": "11.5MB/s",
+      "note": "逐字节忠实镜像（21.0.2 = 201328186 B 与官方一致）；目录页是 Apache 列表，带 <pre>；归档旁有 .sha256"
+    },
+    {
+      "id": "nju",
+      "name": "南大 NJU",
+      "base": "https://mirror.nju.edu.cn/openjdk",
+      "enabled": true,
+      "speed": "8.3MB/s",
+      "note": "需先吃一次 bcheck cookie（裸 GET 是 302 回自己）；健康度会把它排在华为云之后，失败即降级"
+    }
+  ],
+  "microsoft_openjdk": {
+    "list": "https://learn.microsoft.com/java/openjdk/download",
+    "template": "https://aka.ms/download-jdk/microsoft-jdk-{version}-{os}-{arch}.zip",
+    "sha256_template": "https://aka.ms/download-jdk/microsoft-jdk-{version}-{os}-{arch}.zip.sha256sum.txt",
+    "majors": [25, 21, 17, 11],
+    "domestic_mirrors": [],
+    "measured_speed": "398KB/s"
+  },
+  "zulu": {
+    "api": "https://api.azul.com/metadata/v1/zulu/packages/",
+    "detail": "https://api.azul.com/metadata/v1/zulu/packages/{uuid}",
+    "cdn_host": "cdn.azul.com",
+    "measured_speed": "3.3MB/s",
+    "size_field_reliable": false
+  },
+  "rules": [
+    {
+      "id": "bmclapi-launchermeta",
+      "from": "https://launchermeta.mojang.com",
+      "to": "https://bmclapi2.bangbang93.com"
+    },
+    {
+      "id": "bmclapi-piston-meta",
+      "from": "https://piston-meta.mojang.com",
+      "to": "https://bmclapi2.bangbang93.com"
+    },
+    {
+      "id": "bmclapi-piston-data",
+      "from": "https://piston-data.mojang.com",
+      "to": "https://bmclapi2.bangbang93.com"
+    },
+    {
+      "id": "bmclapi-launcher",
+      "from": "https://launcher.mojang.com",
+      "to": "https://bmclapi2.bangbang93.com"
+    },
+    {
+      "id": "bmclapi-libraries",
+      "from": "https://libraries.minecraft.net",
+      "to": "https://bmclapi2.bangbang93.com",
+      "inject": "/maven"
+    },
+    {
+      "id": "bmclapi-assets-objects",
+      "from": "https://resources.download.minecraft.net",
+      "to": "https://bmclapi2.bangbang93.com",
+      "inject": "/assets"
+    },
+    {
+      "id": "bmclapi-forge-maven",
+      "from": "https://files.minecraftforge.net/maven",
+      "to": "https://bmclapi2.bangbang93.com/maven"
+    },
+    {
+      "id": "bmclapi-forge-maven-net",
+      "from": "https://maven.minecraftforge.net",
+      "to": "https://bmclapi2.bangbang93.com/maven"
+    },
+    {
+      "id": "bmclapi-neoforge",
+      "from": "https://maven.neoforged.net/releases",
+      "to": "https://bmclapi2.bangbang93.com/maven"
+    },
+    {
+      "id": "bmclapi-fabric-meta",
+      "from": "https://meta.fabricmc.net",
+      "to": "https://bmclapi2.bangbang93.com/fabric-meta"
+    },
+    {
+      "id": "bmclapi-fabric-maven",
+      "from": "https://maven.fabricmc.net",
+      "to": "https://bmclapi2.bangbang93.com/maven"
+    },
+    {
+      "id": "bmclapi-quilt-meta",
+      "from": "https://meta.quiltmc.org",
+      "to": "https://bmclapi2.bangbang93.com/quilt-meta"
+    },
+    {
+      "id": "bmclapi-maven-central",
+      "from": "https://repo1.maven.org/maven2",
+      "to": "https://bmclapi2.bangbang93.com/maven"
+    },
+    {
+      "id": "bmclapi-liteloader",
+      "from": "https://dl.liteloader.com/versions",
+      "to": "https://bmclapi2.bangbang93.com/maven",
+      "enabled": false
+    },
+    {
+      "id": "bmclapi-authlib-injector",
+      "from": "https://authlib-injector.yushi.moe",
+      "to": "https://bmclapi2.bangbang93.com/mirrors/authlib-injector"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+---- Minecraft Crash Report ----
+// I let you down. Sorry :(
+
+Time: 2026-10-30 12:00:21
+Description: Initializing game
+
+net.minecraft.client.Minecraft$GameLoadException: No supported graphics backend was found.
+	at net.minecraft.client.Minecraft.<init>(Minecraft.java:612)
+	at net.minecraft.client.main.Main.main(Main.java:184)
+
+-- Graphics Backend --
+	Backend: VULKAN
+	Backend failure reason: vulkan_loader_missing
+	Backend: OPENGL
+	Backend failure reason: opengl_missing

@@ -1,0 +1,20 @@
+[package]
+name = "unlucky-i18n"
+description = "Unlucky-Launcher 国际化地基（D28）：语言探测 / 中英消息目录 + 编译期 key 校验 / 缺译诊断 / 中文字体策略与注入式下载器接口"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 依赖面必须保持**空**（与 `unlucky-design` 同一条纪律）：
+# 1. 它要被 UI 层（iced / 将来的任何壳）与 `presenter` 同时依赖，一旦引入 iced/slint 就锁死了渲染框架；
+# 2. 它是**纯数据 + 纯函数**：消息目录是 `&'static str` 常量表，探测与字体扫描全部靠**注入**拿外部世界；
+# 3. 语言探测/字体策略是启动路径上的第一件事，不该为了一句 "en"/"zh-CN" 拉进任何运行时。
+# 证据命令：cargo tree -p unlucky-i18n --edges normal（应当只打印它自己）。
+[dependencies]
+
+[lints]
+workspace = true

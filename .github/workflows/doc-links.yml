@@ -1,0 +1,328 @@
+name: Doc links（rustdoc 内部链接门禁）
+
+# rustdoc 内部链接门禁（M417 收口）：M402~M416 七批把四类告警清到 **0 / 0 / 0 / 0**（未解析 / 链私有项 /
+# 同名歧义 / 冗余显式），现在把它挂成「发现即红」——**绿线起步**，不是先开闸再抢救：再拖存量会回来。
+#
+# 下面三件事是给下一位读者的**凭证边界**，别把这份文件读成「文档链接全好了」。三句缺一不可。
+#
+# ① **为什么单独成文**：三个主守门文件全贴着 400 行红线（`guards.yml` 的 `file-size` job 扫 `*.yml`），
+#    M417 动手时 `wc -l` 实测：`guards.yml` 399（余 1）、`ci.yml` 400（余 0）、`release-build.yml` 399（余 1）
+#    ⇒ 一个都塞不进去。先例逐字相同：`release-guard.yml`、`gpu-evidence.yml` 的文件头都写着同一条理由。
+#
+# ② **它守什么**：守「**解析失败**」（`-D rustdoc::broken_intra_doc_links`：`[`crate::x`]` / `[`x`]` 指不到
+#    任何项 ⇒ rustdoc 非 0 ⇒ job 红）。**M436 起另加一类，但只对点名的 crate**：「**链接到私有项**」
+#    （`private_intra_doc_links`：**公开**文档链到**私有**项 —— 默认只是 warning，`-D` 没管它时**静默放行**）。
+#    **`--document-private-items` 不许删**：不带它时私有模块根本不进文档，链私有项 / 同名歧义 / 未解析里的
+#    相当一部分**根本不报** —— 那就是一次「看起来在守、实际空跑」（项目实测过，T52）。
+#    动因：M435 复审拓出的洞 —— 新冒出一条 `public documentation for `layer` links to private item `blurred``，
+#    而当时只 `-D` 了死链 ⇒ **exit 0、静默放过**。「链私有项 = 0」本来就是 M402~M416 清出来的四类基线之一
+#    （本文件第 3 行自己写着 0/0/0/0），漏守等于给一批已清的存量留回流通道；M435 r1 已把那条新 warning 清掉。
+#    ⚠️ **为什么这条不跟第一条并列、而是按 crate 上卷**：M436 装这条判据时本机实测（`rustc 1.99.1`、
+#    `-D broken_intra_doc_links` + `--document-private-items`）`unlucky-core` 还有 **84 条**
+#    `public documentation for … links to private item …`（散在 42 个文件，`addon/` 系与 `launch/redact.rs`
+#    最多）—— 那一刻全 job 开 `-D` 会让本 job **当天就长红**，而清那 84 条是**另一件事**（装门禁的 mission
+#    不许顺手改业务代码）⇒ 判据**按 crate 上卷**：lint 名在 `env.RUSTDOCFLAGS_EXTRA`、点名在
+#    `env.PRIVATE_LINK_GATED_CRATES`，两步都按同一份 `flags_for()` 派生。**没接的 crate 是明账，不是隐患**：
+#    它们照旧只守死链，等各自清到 0 再加一行。M438 把那 84 条清到 0（合并 tip 上 exit 0 / 0 条），M439 起
+#    core 也接上这条判据 ⇒ 今天两份清单内容相同，**但拆开的理由没消失**：`DOC_GATE_CRATES` 一旦再收进没在
+#    本口径下清过的 crate（名单见「范围」），并列写就又让本 job 当天长红。
+#    ⚠️ 仍然**不是**判据的：`x` is both a function and a module 这类**同名歧义**、`redundant_explicit_links`
+#    以及「渲染后字面 `[x]`」（③）—— 本文件不守这三类。要把它们也接进来，口径是再加一条 `-D` **并且**
+#    **同时**把下面的变异重放扩到那一类：没有对应变异的 `-D` 只是一句希望（M436 给私有项链接加的就是
+#    这一半，见「变异重放」那一步）。（T51：报数先分类，再分文件。）
+#
+# ③ **它守不住什么**：**渲染后印成字面 `[x]` 的那一类**。`` [`Stack`] ``（外部 crate 类型）与本仓没配
+#    doc root 的跨 crate 链接**不产生任何 rustdoc 告警**，但生成页面里是字面 `[Stack]`、点不动（X15，
+#    M413 复审用探针实测）。⇒ 本文件只保证「**不报错**」，**不保证「页面能点」**。那条判据要做的话，
+#    必须先拿 `` [`Stack`] `` 当正样本验它会红，否则它就是装饰品。
+#
+# 范围（M427 起）：**`unlucky-app-iced` + `unlucky-core` 两个 crate**，清单是 job 级 env `DOC_GATE_CRATES`
+#    ——**全文件唯一一份**，两个 step 都从它读，加一个 crate = 加一行 `包名=crate 根文件路径`。
+#    选这两个不是「顺手多扫一棵树」：app-iced 由 M402~M416 清到 0；core 是在**与本文件同一套口径下**
+#    （`-D rustdoc::broken_intra_doc_links` + `--document-private-items`）由 M425（`1fc41d7`，不带私有项
+#    口径下的 36 条）+ M426（`02fb17c`，带私有项口径下的 16 条）清到 0，合并 tip 上实测 DOC_PRIV=0 /
+#    DOC_PLAIN=0 ⇒ 接线是**绿线起步**。（这两个数是「带 / 不带 `--document-private-items` 口径下的**死链**
+#    条数**」，**不是**「core 没有链私有项的告警」—— 后者 M436 实测还有 84 条，M438 才清到 0，见 ② 与
+#    `PRIVATE_LINK_GATED_CRATES`。）
+#    其余 crate（agent / presenter / cli / design / palette-extract / i18n）**没有**在本口径下清过，一次
+#    开大必然一上来就红；扩进去的正常动作是：先拿下面这条命令单独跑那一棵树、确认基线是 0，再往
+#    `DOC_GATE_CRATES` 加一行（不必改任何命令 —— `-p` 只从清单来）。
+#
+# 为什么这里有一条「变异重放」步骤：**一条 check 的价值在于它能红，不在于它现在绿**（T52 第三次教训）。
+# M436 起变异有两种，**一条 `-D` 配一条变异**（缺哪条就等于哪半道门禁没人验过承重 —— 之前只有①，所以
+# `private_intra_doc_links` 装上也没有任何东西证明它承重）：
+#   ① **死链**：**逐 crate**（`DOC_GATE_CRATES` 整份清单）往那个 crate 自己 `src/lib.rs` 顶上插一行指向不
+#      存在路径的 `//!`，断言 exit 非 0 且日志里有 `unresolved link`，然后还原它自己并断言还原干净。
+#   ② **私有项链接**（M436）：**逐「已接这条判据的 crate」**（`PRIVATE_LINK_GATED_CRATES`，今天 = 两个都在
+#      ⇒ 两个各红一次）往那个 crate 根文件**末尾**追加「一个公开函数 + 一个私有模块」，让那个公开函数的
+#      文档链到私有模块 —— 链私有项**只在「公开文档 → 私有目标」时才报**，探针必须自带这两半，不能指望仓里
+#      现成有。断言 exit 非 0 且日志里有 `links to private item`。追加而不是前插：`unlucky-core` 的
+#      `lib.rs:15` 是 `#![forbid(unsafe_code)]`，在它前面插 `mod` 会让文件**根本编不过** —— 那时 cargo doc 也
+#      非 0，但红的是编译错、不是判据；这正是「按日志里那句 lint 文案判红在哪」而不是只看 exit 的理由。
+# 死链那一路**逐 crate**，是因为「清单里删掉一行」没有任何静态检查看得见：只有**那个 crate 自己的变异**
+# 会因此不再被检验 —— 所以清单里每一个 crate 都必须各红一次，才算「它是承重的」（M427）。私有项那一路
+# 同理，只是清单换成 `PRIVATE_LINK_GATED_CRATES`（并断言它是 `DOC_GATE_CRATES` 的子集：名字打错 = 静默不测）。
+# 它红 = **这道门禁坏了**（不是「文档里有死链 / 链私有项」）；它绿而下面那步红 = 真有。两步的名字刻意分开写，
+# 别把几种红读成同一种。
+# ⚠️ 上面这些成立的前提是 **flag 与两份清单都只有一份**（全在 job 级 `env:` 里），而两步消费同一份的办法是
+#    **逐字相同的 `flags_for()`**（`crate → 这次 cargo doc 该用的 RUSTDOCFLAGS`）。所以「有人把某条 `-D`
+#    删掉 / 把 lint 名打错 / 把 crate 名写错 / 把清单清空」都会让**自测先红**（M417 r1 P2-2 修的就是这个：
+#    上一版自测内联了自己那份副本，真判据被解武装时它照样绿）。
+#    **残余缺口，写在这里而不是假装没有**：`flags_for()` 是两份副本 ⇒「只把**真判据**那一步里的
+#    `RUSTDOCFLAGS="$(flags_for …)"` 改回 `${RUSTDOCFLAGS}`」这种解武装，自测看不见（**值**层面的一致它
+#    看得见，**调用**层面的一致它看不见）。这是「判据按 crate 上卷」换来的代价 —— 要彻底消灭它得让两步
+#    共用同一段可执行代码，而仓里没有 composite action，本 mission 又只许改这一个文件。
+#    它守不住的仍是载体依赖本身：「两步都删掉」「整个文件被删」之外，没有东西会跑（同 gpu-evidence 的边界）。
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  # **push（含 dev）一律排队、不取消。** 跑 **dev** 的是 `dev-guards.yml:95-97`（它 `push: branches: [dev]`）；
+  # **发布线** `release.yml:69-71` 是 tag 触发（`push: tags: ['v*']`，不是 dev 线），它也用 `false`，
+  # 仓内现成表述在 `dev-guards.yml:73`：「`release.yml:69-71` 也是 `cancel-in-progress: false`
+  # （发一半的版本比慢更坏）」。理由成文在 `dev-guards.yml:31-33`：「取消掉的 run 既不是绿也不是红，
+  # 是一个**没有结论**的状态，而本文件的全部使命就是出结论 ——『省 runner 分钟』不能拿『永远出不了结论』去换。」
+  # 本文件同时挂在 `dev`（任务书要求 dev 不漏守），照 ci.yml 抄 `true` 等于把 `M364` 刚修掉的失效模式
+  # 又装回来（`dev-guards.yml:49` 记着原形态：`group` + `cancel-in-progress: true`。别把账记到 `M133` 头上
+  # —— 它修的是另一件事：`dev` 线原来**根本没有门禁**，见 `guards.yml:30-31`）。
+  # 而且这里的 `group` 含 `github.ref`，两次 dev push 是**同一个组**，第二次会掐掉正在跑的第一次
+  # （M417 r1 P2-1：上一版注释写成「PR 上重复推送才取消前一轮」，那句是假的）。
+  # PR 上仍取消前一轮：同一 PR 的重复推送是同一套代码，被取消的那次结论由新一次给出。
+  group: doc-links-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  intra-doc-links:
+    name: rustdoc 内部链接（-D broken_intra_doc_links；已接 crate 追加 -D private_intra_doc_links）
+    runs-on: ubuntu-latest
+    # 45 = 本机实测的倍数，不是拍的：M417 在 **main 树（依赖产物已存在）** 上单次 `cargo doc` 实测
+    # **4 分 29 秒**，源码还原后热跑 **14 秒**（本 crate 自己的 doc 才是那 14 秒）。CI 上是**全冷**——
+    # rust-cache 命中时接近本机，未命中时要把 iced / wgpu 整棵树建成 metadata，没有实测值可引，
+    # 所以按 4 分 29 秒 ×5≈22 分再给一倍余量取 45（同族参照：ci.yml clippy 45 / guards licenses 30）。
+    # 本 job 要跑几次 cargo doc：M427 起四次，**M436 起五次，M439 起六次**（变异重放 = 死链 × 2 crate +
+    # 私有项 × 2 crate = 4 次，真判据 = 2 crate），后五次复用第一次的依赖产物 ⇒ 增量主要是「每个 crate
+    # 自己那十几秒量级的 doc 重跑」。
+    # M436 本机热跑实测（依赖产物已在、`CARGO_BUILD_JOBS=2`、直接跑 YAML 里那两段 `run:`）：变异重放那一步
+    # 的 3 次 cargo doc 共 **36 秒**、真判据那一步的 2 次共 **19 秒**；对照 M417 记的 31.7 / 35.5 秒同一量级。
+    # **M439 同一口径（4 + 2 次）复测**：变异重放 **49 秒**、真判据 **32 秒**（core 自己那两次 doc 各约 10.5 / 12 秒）
+    # —— 多出来的一次私有项变异约 15 秒，45 分钟上限照旧够用。而同一棵树在**空 `CARGO_TARGET_DIR`** 上跑整条
+    # 变异重放（含 app-iced 冷建依赖 metadata）用 **5 分 32 秒**，那才是上限真正的消耗项。
+    # ⚠️ CI 上**没跑过**：本仓 runner 不消费任务，上面这些全是本机数字，不是 CI 实测（冷跑参照也只是本机：
+    # M436 在空 `CARGO_TARGET_DIR` 上单跑一次 app-iced 用了 **6 分 13 秒**，含整棵依赖树的 metadata）。
+    timeout-minutes: 45
+    # 交付物门禁的**唯一值来源**：`RUSTDOCFLAGS` / `RUSTDOCFLAGS_EXTRA` / 两份清单全文件各只有一份（都在这里），
+    # 自测与真判据两步都从它们派生。谁把某条 `-D` 删掉、把 lint 名写成错名、把 crate 名写错、把清单清空，
+    # **自测那步先红**。别在步骤里再内联一份副本 —— 那样自测只证明「它自己那份还在」（M417 r1 P2-2）。
+    # **M436**：为什么第二条 `-D` 不跟第一条并列（并列是最省事的写法）—— 装它那天 `unlucky-core` 还带
+    # **84 条**链私有项存量，并列写 ⇒ 本 job **当天就长红**（实测与清单见文件头 ②）。所以拆成「基础一份 +
+    # 只对 `PRIVATE_LINK_GATED_CRATES` 点名的 crate 追加一份」；两步用**逐字相同**的 `flags_for()` 拼。
+    # **M439 起两份清单内容相同**（core 已由 M438 清零并接上），但拆分**没有**因此变成多余的：`DOC_GATE_CRATES`
+    # 一旦再收进没清过的 crate，并列写就又变成本 job 当天长红 —— 而「哪个 crate 接了哪条判据」也靠这份清单显式记账。
+    env:
+      # 死链：`DOC_GATE_CRATES` 里每个 crate 都用它。
+      RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
+      # 链私有项：**只追加给 `PRIVATE_LINK_GATED_CRATES` 里点名的 crate**。这个 lint 名全文件只出现这一次。
+      RUSTDOCFLAGS_EXTRA: -D rustdoc::private_intra_doc_links
+      # 已接「链私有项」判据的 crate（一行一个包名，**必须是 `DOC_GATE_CRATES` 的子集**，自测会断言）。
+      # 加一行 = 那个 crate 多守一类；前提是它先在本口径下清到 0（core：M436 装这条判据时还有 84 条 ⇒
+      # 当时不在；M438 清到 0、合并 tip 实测 exit 0 / 0 条，M439 才加进来）。
+      PRIVATE_LINK_GATED_CRATES: |
+        unlucky-app-iced
+        unlucky-core
+      # 门禁清单（M427）：**全文件唯一一份**。格式 `包名=crate 根文件路径`，一行一个 crate。
+      # 加一个 crate = 在下面加一行；两步里的 `-p` 与变异落点都从这里取，不需要改命令。
+      # 删一行 = 那个 crate 不再被守（也不会再被变异重放检验）—— 这是清单这种写法的固有代价，
+      # 反向兜底只有「变异重放逐 crate 各红一次」，它证明的是「列出来的都承重」，不是「列全了」。
+      DOC_GATE_CRATES: |
+        unlucky-app-iced=crates/app-iced/src/lib.rs
+        unlucky-core=crates/core/src/lib.rs
+    steps:
+      - uses: actions/checkout@v4
+      # 与 ci.yml 的 test job 逐字同一份清单：`cargo doc --no-deps` 仍要**编并运行**依赖的 build script，
+      # Linux 上字体 / 图形栈的 pkg-config 探针就在那里跑，缺包会红在「找不到 fontconfig」这类不相干的错上。
+      - name: Linux 图形栈构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libwayland-dev libxcb1-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu-latest
+      # 先跑自测：这道门禁抓不住回归时它先红（否则「守门永远绿」这件事没人看得见）。
+      - name: 变异重放（死链逐 crate + 私有项链接逐已接 crate；各自必须 exit 非 0 并红在对应 lint；写完还原）
+        run: |
+          set -uo pipefail
+          # 清单来自 job 级 env（DOC_GATE_CRATES，唯一一份）。
+          log_dir="$RUNNER_TEMP/doc-links-mutation"
+          mkdir -p "$log_dir"
+          crates=()
+          targets=()
+          while IFS='=' read -r crate target; do
+            [ -n "${crate:-}" ] || continue
+            if [ -z "${target:-}" ]; then
+              echo "::error::DOC_GATE_CRATES 的条目 '$crate' 缺少 '=crate 根文件路径'（写错就会静默跳过这个 crate）"
+              exit 1
+            fi
+            if [ ! -f "$target" ]; then
+              echo "::error::$crate 在清单里指向的 $target 不存在（crate 改名/挪目录后忘了改清单？）"
+              exit 1
+            fi
+            crates+=("$crate")
+            targets+=("$target")
+          done <<< "${DOC_GATE_CRATES:-}"
+          if [ "${#crates[@]}" -eq 0 ]; then
+            echo "::error::DOC_GATE_CRATES 为空 ⇒ 变异重放与真判据都会空跑，这道门禁什么也没守"
+            exit 1
+          fi
+          # 还原**双保险**，粒度：循环里**逐 crate 显式还原**（下一圈一定跑在干净源码上，且「某个 crate
+          # 没还原」会当场被它自己的 `git status` 判据抓住，不会被下一个 crate 的还原掩盖），EXIT trap
+          # 再兜**整份清单**（job 被 45 分钟上限掐掉 / run 被取消时，还没轮到的那几个 crate 也已还原；
+          # `git checkout --` 对未改动的文件是 no-op，所以逐 crate 调安全）。
+          # 边界写实：SIGKILL 时 trap 不跑 —— 但 Actions 的 checkout 是每个 run 一次性的工作区，
+          # 跑不完就随 runner 一起销毁，不会跨 run 污染下一个。
+          restore_all() { git checkout -- "${targets[@]}" || true; }
+          trap restore_all EXIT
+          # 每个 crate 这次 cargo doc 该用的 RUSTDOCFLAGS：基础那份（死链）+ **已接 crate** 的附加那份（链私有项）。
+          # **真判据那一步有一份逐字相同的副本** —— 「flag 只有一份」这条前提就靠这两份相同的派生实现撑着；
+          # 残余缺口（值层面一致＝自测看得见，调用层面一致＝自测看不见）写在文件头「变异重放」那段最后。
+          flags_for() {
+            if grep -qx -- "$1" <<< "${PRIVATE_LINK_GATED_CRATES:-}"; then
+              printf '%s %s' "${RUSTDOCFLAGS:-}" "${RUSTDOCFLAGS_EXTRA:-}"
+            else
+              printf '%s' "${RUSTDOCFLAGS:-}"
+            fi
+          }
+          # 已接「链私有项」判据的 crate：必须非空、必须是 DOC_GATE_CRATES 的子集（名字打错 = 静默不测）。
+          gated=()
+          while read -r g; do
+            [ -n "${g:-}" ] || continue
+            hit=0
+            for c in "${crates[@]}"; do [ "$c" = "$g" ] && hit=1; done
+            if [ "$hit" -ne 1 ]; then
+              echo "::error::PRIVATE_LINK_GATED_CRATES 里的 '$g' 不在 DOC_GATE_CRATES 里：名字打错 ⇒ 这一路变异重放会静默不跑"
+              exit 1
+            fi
+            gated+=("$g")
+          done <<< "${PRIVATE_LINK_GATED_CRATES:-}"
+          if [ "${#gated[@]}" -eq 0 ]; then
+            echo "::error::PRIVATE_LINK_GATED_CRATES 为空 ⇒ 链私有项这条判据一个 crate 也没在守，变异重放同样空跑"
+            exit 1
+          fi
+          # 两种变异（M436 起）：**一条 `-D` 配一条变异**，两半的定义见文件头「变异重放」那段。
+          mutate() { # $1=kind $2=crate 根文件
+            case "$1" in
+              broken)  # ① 死链：文件**开头**插一行 `//!`，`crate::` 下那个路径不存在
+                { printf '//! [M427 变异重放：这一行只存在于本次运行里](crate::this_symbol_does_not_exist_m427)\n'; cat "$2"; } > "$RUNNER_TEMP/lib.rs.mutated" ;;
+              private) # ② 私有项链接：文件**末尾**追加「公开函数 + 私有模块」，公开函数的文档链到私有模块
+                cp "$2" "$RUNNER_TEMP/lib.rs.mutated"
+                printf '\n/// [M436 变异重放：这一行只存在于本次运行里](m436_private_probe)\npub fn m436_private_probe_doc() {}\n\nmod m436_private_probe {}\n' >> "$RUNNER_TEMP/lib.rs.mutated" ;;
+            esac
+            cp "$RUNNER_TEMP/lib.rs.mutated" "$2"
+          }
+          # 每种变异在日志里必须留下的那一句 lint 文案。**判据是这句，不是 exit 非 0**：编译错也非 0，
+          # 那种红不是「门禁抓到了这一类问题」，只是变异把源码写坏了。
+          expect_of() {
+            case "$1" in
+              broken) echo "unresolved link" ;;
+              private) echo "links to private item" ;;
+            esac
+          }
+          run_one() { # $1=kind $2=crate $3=crate 根文件
+            expect="$(expect_of "$1")"
+            log="$log_dir/$2.$1.log"
+            echo "::group::变异重放[$1]：$2 ← $3"
+            mutate "$1" "$3"
+            # 不在命令里内联 flag 文本、也不在步骤里另存一份：逐 crate 从 env 经 `flags_for` 派生。
+            RUSTDOCFLAGS="$(flags_for "$2")" cargo doc -p "$2" --no-deps --document-private-items > "$log" 2>&1
+            rc=$?
+            git checkout -- "$3"
+            if [ "$rc" -eq 0 ]; then
+              echo "::error::[$2/$1] 变异重放没红：插进 $3 的 $1 变异没让 cargo doc 失败 ⇒ 这个 crate 的守门守不住 $1 这一半"
+              echo "::error::[$2/$1] 常见成因：env 里少了对应的那条 -D（这一类只降级成 warning）；或清单里这一条的包名与 -p 不符"
+              tail -30 "$log"
+              exit 1
+            fi
+            if ! grep -q "$expect" "$log"; then
+              echo "::error::[$2/$1] 变异让 cargo doc 红了（exit $rc），但红的不在 $1 这一半：日志里没有 '$expect' —— 编不过、或别的 lint 红了，都算假红"
+              tail -30 "$log"
+              exit 1
+            fi
+            if [ -n "$(git status --porcelain -- "$3")" ]; then
+              echo "::error file=$3::[$2/$1] 变异没还原干净，后面的真判据跑在污染过的源码上，结果不可信"
+              exit 1
+            fi
+            grep -m1 "$expect" "$log" || true
+            echo "OK: [$2/$1] 变异重放确认这道门禁会红在 $1 上（cargo doc exit $rc + '$expect'），$3 已还原"
+            echo "::endgroup::"
+          }
+          # ① 死链：**整份** DOC_GATE_CRATES 逐个各红一次（删掉清单里任何一行，这里就少一次检验）。
+          for i in "${!crates[@]}"; do
+            run_one broken "${crates[$i]}" "${targets[$i]}"
+          done
+          # ② 私有项链接：只对**已接这条判据**的 crate 各红一次（今天 = unlucky-app-iced + unlucky-core）。
+          for g in "${gated[@]}"; do
+            for i in "${!crates[@]}"; do
+              if [ "${crates[$i]}" = "$g" ]; then run_one private "${crates[$i]}" "${targets[$i]}"; fi
+            done
+          done
+          trap - EXIT
+          echo "OK: 死链变异 ${#crates[@]} 个 crate 全红过（${crates[*]}）；私有项变异 ${#gated[@]} 个 crate 全红过（${gated[*]}）"
+      - name: cargo doc（-D broken_intra_doc_links；已接 crate 追加 -D private_intra_doc_links）
+        run: |
+          set -uo pipefail
+          # 命令逐字照任务书：`--document-private-items` 不许省（省了等于空跑，见文件头 ②）。
+          # 每个 crate 用的 RUSTDOCFLAGS 由 `flags_for` 从 job 级 env 派生（**与变异重放那一步逐字相同的副本**），
+          # 这里不另存一份 flag 文本：删掉 env 里的某条 `-D`，自测先红。
+          # 清单也来自 job 级 env：`-p` 的取值只有一处，删掉一行就等于不再守那个 crate。
+          flags_for() {
+            if grep -qx -- "$1" <<< "${PRIVATE_LINK_GATED_CRATES:-}"; then
+              printf '%s %s' "${RUSTDOCFLAGS:-}" "${RUSTDOCFLAGS_EXTRA:-}"
+            else
+              printf '%s' "${RUSTDOCFLAGS:-}"
+            fi
+          }
+          log_dir="$RUNNER_TEMP/doc-links"
+          mkdir -p "$log_dir"
+          checked=0
+          failed=0
+          while IFS='=' read -r crate target; do
+            [ -n "${crate:-}" ] || continue
+            log="$log_dir/$crate.log"
+            flags="$(flags_for "$crate")"
+            # 把实际生效的 flag 打进日志：红了以后**这一行**就是「当时到底开了哪几条 -D」的证据，不用猜。
+            echo "::group::cargo doc（$crate ← $target）RUSTDOCFLAGS=$flags"
+            RUSTDOCFLAGS="$flags" cargo doc -p "$crate" --no-deps --document-private-items > "$log" 2>&1
+            rc=$?
+            checked=$((checked + 1))
+            if [ "$rc" -ne 0 ]; then
+              # 一眼看出是哪个 crate 红的：标题带 crate 名，正文先摘两类判据各自的那句话，再给日志尾部。
+              echo "::error title=rustdoc 内部链接（$crate）::crate=$crate 的 cargo doc 失败（exit $rc）；日志：$log"
+              grep -m5 -e "unresolved link" -e "links to private item" "$log" || true
+              tail -40 "$log"
+              failed=$((failed + 1))
+            else
+              echo "OK: $crate 的 rustdoc 内部链接判据 exit 0"
+            fi
+            echo "::endgroup::"
+          done <<< "${DOC_GATE_CRATES:-}"
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::DOC_GATE_CRATES 为空 ⇒ 真判据一步没跑，等于放行"
+            exit 1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::$checked 个 crate 里有 $failed 个红了（见上面各 crate 标题）"
+            exit 1
+          fi
+          echo "OK: $checked 个 crate 的 rustdoc 内部链接判据全部 exit 0"

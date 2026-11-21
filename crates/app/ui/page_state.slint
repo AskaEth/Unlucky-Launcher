@@ -1,0 +1,77 @@
+// P3 全量接线的页面状态：一个导出的 global，Slint 任何页面都能直接读/回推。
+//
+// 为什么用 global 而不是继续经 main.slint → shell.slint 逐层转发：属性表已经 100+ 条，
+// 再加五页的数据会把 main.slint 顶破 400 行上限（AGENTS §3）。global 在同一个 Slint
+// 编译单元内是单例，Rust 侧用 `ui.global::<PageState>()` 读写，语义与 property 相同。
+//
+// 纪律：这里只放「页面要显示什么」与「用户点了什么」，业务真相在 Rust 的 state.rs。
+import { UiAccount, UiDeviceCode, UiJavaVendor, UiJavaStep, UiJavaRuntime, UiInstallProgress, UiSettingGroup, UiNotice, UiWizard, UiVersion } from "models.slint";
+
+export global PageState {
+    // ── 账户页 ────────────────────────────────────────────────
+    in-out property <[UiAccount]> accounts;
+    in property <string> active-account: "";
+    in property <UiDeviceCode> device;
+    /// 离线添加表单的输入（不落盘，点「添加」才提交）
+    in-out property <string> offline-name: "";
+
+    // ── Java（下载页 Java 分组 / 设置页 Java 分组）──────────────
+    in property <[UiJavaVendor]> java-vendors;
+    in property <[UiJavaStep]> java-chain;
+    in property <[UiJavaRuntime]> java-runtimes;
+    in property <string> java-order: "";
+    in property <string> java-region: "";
+    in property <string> java-priority-source: "";
+    in property <string> java-message: "";
+    in property <bool> java-busy: false;
+    in property <int> java-target-major: 17;
+
+    // ── 安装进度（下载页 + 向导共用）────────────────────────────
+    in property <UiInstallProgress> install;
+    /// 下载页右侧视图：0 = 版本列表，1 = Java 运行时（截图通道也从这里切）
+    in-out property <int> download-tab: 0;
+
+    // ── 设置分组（settings_bridge 同源 launcher.json）──────────
+    in property <[UiSettingGroup]> setting-groups;
+    in-out property <string> setting-tab: "download";
+
+    // ── 通知条 / 向导 ─────────────────────────────────────────
+    in property <[UiNotice]> notices;
+    in property <UiWizard> wizard;
+    in property <[UiVersion]> wizard-versions;
+
+    // ── 账户 ──────────────────────────────────────────────────
+    callback account-add-offline(string);
+    callback account-remove(string);
+    callback account-switch(string);
+    callback msa-begin();
+    callback msa-browser-begin();
+    callback msa-cancel();
+
+    // ── Java ──────────────────────────────────────────────────
+    callback java-install(string);
+
+    // ── 设置 ──────────────────────────────────────────────────
+    callback setting-changed(string, string);
+    callback setting-action(string);
+    callback settings-tab-changed(string);
+
+    // ── 通知 ──────────────────────────────────────────────────
+    callback notice-dismiss(string);
+
+    // ── 向导 ──────────────────────────────────────────────────
+    callback wizard-open();
+    callback wizard-close();
+    callback wizard-select-version(string);
+    callback wizard-select-loader(int);
+    callback wizard-name-changed(string);
+    callback wizard-next();
+    callback wizard-back();
+    callback wizard-confirm();
+    callback install-cancel();
+
+    // ── 日志页：崩溃日志导入 / 手动刷新 ──────────────────────────
+    in-out property <string> crash-path: "";
+    callback crash-import(string);
+    callback logs-refresh();
+}

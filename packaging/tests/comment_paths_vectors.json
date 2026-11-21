@@ -1,0 +1,238 @@
+{
+  "note": "M402 注释路径守门的自测向量。每条 = 一份合成小仓（files）+ 期望命中的判死种类（expect）。带 repo 的跑真仓。数据与执行器分家：执行器是 tests/comment_paths_selftest.py。",
+  "cases": [
+    {
+      "label": "应解：符号就定义在那个文件里（路径是半截的，按段序匹配）",
+      "files": {
+        "a/first.rs": "pub fn shared() {}\n",
+        "b/second.rs": "/// 见 `first.rs::shared`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "应解：内联 mod 里的项（不必展开嵌套链）",
+      "files": {
+        "c/inline.rs": "mod inner {\n    pub fn deep() {}\n}\n",
+        "c/user.rs": "//! 见 `inline.rs::deep`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "应解：impl 块里的方法（同一份文件索引）",
+      "files": {
+        "c/state.rs": "pub struct AppState;\n\nimpl AppState {\n    pub const TICK_MS: u64 = 16;\n\n    pub fn tick(&self) {}\n}\n",
+        "c/user.rs": "// 见 `state.rs::tick` 与 `state.rs::TICK_MS`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "应解：`pub use` 再导出（那条路径真的可达）",
+      "files": {
+        "d/mod.rs": "pub use crate::d::inner::Thing;\n",
+        "d/inner.rs": "pub struct Thing;\n",
+        "d/user.rs": "// 见 `mod.rs::Thing`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "应解：跨行 `use` 树（本仓大量这种写法）",
+      "files": {
+        "e/mod.rs": "pub use crate::e::{alpha,\n    beta,\n    gamma};\n",
+        "e/user.rs": "// 见 `mod.rs::beta`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "应解：结构体字段与枚举变体",
+      "files": {
+        "f/types.rs": "pub struct Page {\n    pub title: String,\n}\n\npub enum Mode {\n    Compact,\n}\n",
+        "f/user.rs": "// 见 `types.rs::title` 与 `types.rs::Compact`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "应解：`const fn`（`const` 与 `fn` 挨着时别把 `fn` 当成名字）",
+      "files": {
+        "g/motion.rs": "pub const fn progress_spec() -> u8 { 1 }\n",
+        "g/user.rs": "// 见 `motion.rs::progress_spec`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "应解：文件名含空格",
+      "files": {
+        "h/my file.rs": "pub fn spaced() {}\n",
+        "h/user.rs": "// 见 `my file.rs::spaced`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "应解：通配前缀（`the_x_*` 只能按前缀找）",
+      "files": {
+        "i/m349.rs": "#[test]\nfn the_pinned_advisory_has_no_dead_ends() {}\n",
+        "i/user.rs": "// 见 `m349.rs::the_pinned_advisory_*`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "应解：代码里字符串里的路径不算注释",
+      "files": {
+        "j/str.rs": "pub fn k() {\n    let _ = \"note.rs::ghost\";\n}\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "判死：文件不存在（路径锚在仓根目录上）",
+      "files": {
+        "crates/real.rs": "pub fn alive() {}\n",
+        "crates/user.rs": "// 见 `crates/gone.rs::alive`。\n"
+      },
+      "expect": ["missing"]
+    },
+    {
+      "label": "判死：文件在、符号在别的文件",
+      "files": {
+        "k/a.rs": "pub fn wanted() {}\n",
+        "k/b.rs": "pub fn other() {}\n",
+        "k/user.rs": "// 见 `b.rs::wanted`。\n"
+      },
+      "expect": ["absent"]
+    },
+    {
+      "label": "判死：符号哪都没有",
+      "files": {
+        "l/a.rs": "pub fn here() {}\n",
+        "l/user.rs": "// 见 `a.rs::nowhere`。\n"
+      },
+      "expect": ["absent"]
+    },
+    {
+      "label": "判死：块注释里的引用一样算（`/* … */`）",
+      "files": {
+        "p/q.rs": "pub fn real() {}\n",
+        "p/user.rs": "/*\n * 见 `q.rs::ghost`。\n */\n"
+      },
+      "expect": ["absent"]
+    },
+    {
+      "label": "反向用例（X11 的形态④ 写法）：`view.rs::yolo_row`，view.rs 只把它私有 `use` 进来 —— 真仓 view.rs:33 就是这个形状",
+      "files": {
+        "pages/settings/ai/toggles.rs": "pub(super) fn yolo_row() {}\n",
+        "pages/settings/ai/view.rs": "use crate::pages::settings::ai::toggles::{enable_row, yolo_row};\n",
+        "pages/settings/ai/user.rs": "// 开关那颗控件是 `view.rs::yolo_row`。\n"
+      },
+      "expect": ["alias"]
+    },
+    {
+      "label": "反向用例（X9 的修法）：`toggles.rs::yolo_row` 必须绿 —— 防假红的关键一条",
+      "files": {
+        "pages/settings/ai/toggles.rs": "pub(super) fn yolo_row() {}\n",
+        "pages/settings/ai/user.rs": "// 见 `pages/settings/ai/toggles.rs::yolo_row`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "判不了：外部源码的一截（tiny-skia 的 `lib.rs`）—— 不判死",
+      "files": {
+        "m/user.rs": "// tiny-skia 把绘制分成几批（`iced_tiny_skia/src/lib.rs::present`）。\n"
+      },
+      "expect": ["external"]
+    },
+    {
+      "label": "应解：同名文件多个、符号在其中之一",
+      "files": {
+        "n/one/tests.rs": "fn target_case() {}\n",
+        "n/two/tests.rs": "fn other_case() {}\n",
+        "n/user.rs": "// 见 `tests.rs::target_case`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "判死：同名文件多个、哪个都没有它（判死口径是「全部候选都没有」）",
+      "files": {
+        "o/one/tests.rs": "fn a() {}\n",
+        "o/two/tests.rs": "fn b() {}\n",
+        "o/user.rs": "// 见 `tests.rs::ghost`。\n"
+      },
+      "expect": ["absent"]
+    },
+    {
+      "label": "判死：块注释没闭合也照样扫（遮罩到 EOF，不许崩）",
+      "files": {
+        "z/q.rs": "pub fn real() {}\n",
+        "z/broken.rs": "/*\n * 见 `q.rs::ghost`\n"
+      },
+      "expect": ["absent"]
+    },
+    {
+      "label": "应解：字符串里的 `//` 不是注释起点（`\"http://…\"` 不算）",
+      "files": {
+        "y/a.rs": "pub fn kept() {}\n",
+        "y/user.rs": "pub fn k() {\n    let _ = \"http://example.invalid/ghost.rs::x\";\n}\n// 见 `a.rs::kept`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "判死不放过（r1 P2-1）：中文紧贴 + 无引号 + 符号不存在 —— `\\w` 的 Unicode 语义会把它吞成「外部路径」静默放行",
+      "files": {
+        "app/view/logs.rs": "pub fn logs_model() {}\n",
+        "pages/settings/ai/user.rs": "//! 见app/view/logs.rs::nosuch_symbol 的定义。\n"
+      },
+      "expect": ["absent"]
+    },
+    {
+      "label": "应解（r1 P2-1 的反方向）：中文紧贴着一个**存在**的符号，不许把中文吃进符号名判死",
+      "files": {
+        "pages/settings/ai/toggles.rs": "pub(super) fn yolo_row() {}\n",
+        "pages/settings/ai/user.rs": "//! 见pages/settings/ai/toggles.rs::yolo_row的定义。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "应解：`static mut COUNTER` 的符号名（`static` 后面那个 `mut` 不是名字）",
+      "files": {
+        "w/globals.rs": "pub static mut COUNTER: u32 = 0;\n",
+        "w/user.rs": "// 见 `globals.rs::COUNTER`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "边界契约 ④：宏生成的名字**会假红**（名字不在源码里 ⇒ absent ⇒ fatal，连 --all 都不列）",
+      "files": {
+        "g/gen.rs": "macro_rules! getter { ($name:ident) => { fn $name() {} } }\n\n#[derive(Default)]\npub struct Thing;\n",
+        "g/user.rs": "// 见 `gen.rs::generated_getter` 与 `gen.rs::default`。\n"
+      },
+      "expect": ["absent", "absent"]
+    },
+    {
+      "label": "边界契约 ⑤：`x.rs:NN` 行号**根本不匹配**（REF 要 `::`）—— 既不红，也不进 --all",
+      "files": {
+        "g/gen.rs": "pub fn real() {}\n",
+        "g/user.rs": "// 见 `gen.rs:42` 与 `gen.rs:7-9`。\n"
+      },
+      "expect": []
+    },
+    {
+      "label": "边界契约 ⑥：被删文件只剩裸文件名（首段不是仓内目录）⇒ 判不了，不红",
+      "files": {
+        "h/user.rs": "// 见 `gone.rs::something`（那个文件已经被删了）。\n"
+      },
+      "expect": ["external"]
+    },
+    {
+      "label": "真仓回归：X9 修法 `pages/settings/ai/toggles.rs::yolo_row`（presenter/host/settings/ai.rs）必须绿",
+      "repo": "crates/presenter/src/host/settings/ai.rs",
+      "expect": []
+    },
+    {
+      "label": "真仓回归：X11 原形 `ai::view::yolo_row` 是形态①，本守门故意不管（这条钉子防「顺手扩到 ①②③」）",
+      "repo": "crates/app-iced/src/app/update/settings/tests/yolo_toggle.rs",
+      "expect": []
+    },
+    {
+      "label": "真仓回归：X9 这一族在真仓里**已修净** —— pages/logs.rs 现在写的是 `app/view/logs.rs::logs_model`（M404 清的基线），必须绿",
+      "repo": "crates/app-iced/src/pages/logs.rs",
+      "expect": []
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+name: Update E2E
+
+# 更新链路的端到端验收（M169 建，M368 从 `ci.yml` 整段抽出）。作业体（命令 / `env` / 超时）**逐字未改**，
+# 只换了位置与触发方式：抽取前后它跑的东西一模一样。
+#
+# **为什么单独成文**：`ci.yml` 抽前 398 行、红线 400（`guards.yml` 的 file-size 那道门扫 `*.yml`）⇒ 这条作业
+# 每改一次都得先还一笔行数债。搬走之后 `ci.yml` 只剩 371 行，余量从 2 行变 29 行，判据一条没动。
+#
+# 两种触发，各管一条线：
+#   - `workflow_call:` —— `ci.yml` 的 `update-e2e` job 用 `uses: ./.github/workflows/update-e2e.yml` 调它。
+#     「什么时候跑」因此仍只由调用方的 `on:` 决定（push main / pull_request / schedule / 手动），与抽取前相同。
+#   - `workflow_dispatch:` —— **dev 线的唯一可见通道**。本仓日常合并不走 PR、`ci.yml` 的 push 只挂 main
+#     ⇒ update 回归在 dev 线上一次都不会自动跑，「第一次能被看见的时机」过去只有「推快照那一刻」。
+#     现在发版前手动 dispatch 一次即可（操作项见 `packaging/docs/build-and-ci.md` §3「发版前」那条）。
+#
+# **`timeout-minutes: 45` 必须留在这个文件里，不要搬到调用方的 `uses:` job 上**：`uses:` job 只接受
+# `name`/`uses`/`with`/`secrets`/`needs`/`if`/`strategy`/`permissions`/`concurrency` 这一小批键，多一个
+# `timeout-minutes` 会让**整份 workflow 加载失败**（不是那一个 job 红）。超时属于作业体，作业体在这里。
+#
+# 自己带一份 workflow 级 `env:`：`workflow_call` 只传 inputs / secrets，**不继承**调用方的 workflow 级 `env:`
+# ⇒ 抄回 `ci.yml` 顶部那两条，作业环境与抽取前逐字一致（少了它们日志没颜色、panic 没有回溯）。
+#
+# ---- 验收条件（M365 结论原文，别把它改写成「下次应该绿」） ----
+# **下一次它红必须带 cargo 正文；只有一句 `Process completed with exit code 1` 说明 pwsh 包装层的问题还在。**
+# 下面 `Select-String … ::error::` 那一段就是为此存在的：job log 匿名侧读不到（403）时，check-run 的注解是
+# 唯一可见正文（M275）。所以这个作业红的时候，先看注解里有没有 cargo 正文，再谈为什么红。
+#
+# ---- 诚实边界：跨卷 ----
+# **CI 绿从来不代表跨卷验过。** runner 上只有一块可写卷，本作业因此恒走豁免分支
+# （`ULL_XDEV_TEST_WAIVE: "1"`，见 job 级 `env:`）⇒ 跨卷替换 / 回滚那条路径在 CI 上一次都没真跑过；
+# 唯一真验过的是本机 C:/D: 两块卷那一次。这里的绿只能读成「单卷上的 E2E 绿」。
+#
+# ---- 为什么只在 Windows、为什么是 release 档 ----
+# 真实产物是裸 `.exe` + `portable-exe`；Linux/macOS 是 `.tar.gz` + `portable-zip`（`ensure_self_replaceable`
+# 直接拒）⇒ 在 ubuntu 上跑绿只证明「世上不存在的 linux portable-exe 能装上」。也不发 debug 档：
+# `debug_assertions` / 优化 / panic 行为都不同，用 debug 跑这条 E2E 就失去它存在的理由。慢是已知的
+# （本机实测 7 分钟：release + fat LTO），能跑起来比跑得快重要。
+#
+# ---- 守门锚点（改步骤名之前先读这段） ----
+# 步骤名 `update-e2e` 与 run 里的 `--test update_e2e_test` 被 `packaging/check_test_source_off.py` 的
+# `ALLOWED_STEP` 钉死：**本文件这一步是全仓唯一允许出现 `--features update-test-source` 的地方**。
+# M368 抽取时把那份 allowlist 的 `workflow` 从 `ci.yml` 改成 `update-e2e.yml`（只留一处，比原来更严），
+# 并补了一条向量「把该 feature 写回 `ci.yml` ⇒ 必须红」：`ci.yml` 现在只有 `uses:` 编排，那里**不该**再
+# 出现这个 feature。改步骤名 / 改 run / 改文件名，三处任意一处与 allowlist 不符都会红。
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  update-e2e:
+    name: update-e2e (windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # 同 test 作业：跨卷 e2e 守卫在没有第二块卷的 runner 上需要显式豁免，否则会判红。
+      ULL_XDEV_TEST_WAIVE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-latest
+      # M275：裸 `cargo test` 失败只留一句 `exit code 1`、check-run 上零注解（匿名侧等于信息为零），所以照
+      # test 作业同一手法升注解：`$LASTEXITCODE` 是 cargo 的真码（Tee-Object 是 cmdlet，不改它）、`%` → `%25`。
+      - name: update-e2e
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'update-e2e.log'
+          cargo test --release -p unlucky-cli --features update-test-source --test update_e2e_test --test update_e2e_tamper_test 2>&1 | Tee-Object -FilePath $log
+          $code = $LASTEXITCODE; Write-Host "cargo exit=$code"
+          if ($code -ne 0) {
+            Select-String -Path $log -Pattern '(error(\[E\d+\])?:|^failures:|test result: FAILED|thread .* panicked at|^\s+--> )' | Select-Object -First 40 |
+              ForEach-Object { Write-Host "::error::$($_.Line.Replace('%', '%25'))" }
+          }
+          exit $code

@@ -1,0 +1,83 @@
+// Metro 按钮：扁平 + accent 填充，无圆角渐变，hover 只变底色（D14）。
+// 四种语义：accent（主操作）/ standard（次要）/ subtle（工具条）/ danger（危险确认）。
+// grow = true 时占满布局剩余宽度（磁贴的启动键），否则保持内容宽度（工具按钮）。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+import { UiText, TextRole } from "../components/label.slint";
+
+export enum ButtonKind {
+    accent,
+    standard,
+    subtle,
+    danger,
+}
+
+export component MetroButton inherits Rectangle {
+    in property <ButtonKind> kind: ButtonKind.standard;
+    in property <string> text: "";
+    in property <IconKind> icon: IconKind.plus;
+    /// 是否显示图标（纯文字按钮置 false）
+    in property <bool> show-icon: false;
+    in property <bool> enabled: true;
+    /// 图标按钮：不画文字，尺寸压到正方形
+    in property <bool> icon-only: false;
+    /// 在布局中占据剩余宽度
+    in property <bool> grow: false;
+    in property <length> button-height: Metrics.control-height;
+    callback clicked();
+
+    min-width: icon-only ? button-height : text-layout.preferred-width;
+    height: button-height;
+    horizontal-stretch: grow ? 1 : 0;
+    border-radius: Metrics.radius-sm;
+    border-width: kind == ButtonKind.standard ? 1px : 0px;
+    border-color: Theme.stroke-strong;
+    opacity: enabled ? 1.0 : 0.45;
+
+    background: kind == ButtonKind.accent
+            ? (touch.has-hover ? Theme.accent-hover : Theme.accent)
+        : kind == ButtonKind.danger
+            ? (touch.has-hover ? Theme.state-danger-hover : Theme.state-danger)
+        : kind == ButtonKind.subtle
+            ? (touch.pressed ? Theme.bg-pressed : touch.has-hover ? Theme.bg-hover : transparent)
+        : (touch.pressed ? Theme.bg-pressed : touch.has-hover ? Theme.bg-hover : Theme.bg-surface);
+    animate background { duration: Theme.motion-fast; }
+
+    text-layout := HorizontalLayout {
+        alignment: center;
+        padding-left: icon-only ? 0px : Metrics.gap-2;
+        padding-right: icon-only ? 0px : Metrics.gap-2;
+        spacing: Metrics.gap-1;
+
+        AppIcon {
+            icon-size: Metrics.touch-target / 2;
+            kind: root.icon;
+            visible: root.show-icon || root.icon-only;
+            tint: kind == ButtonKind.accent || kind == ButtonKind.danger
+                ? Theme.fg-on-accent
+                : Theme.fg-primary;
+        }
+        UiText {
+            role: TextRole.bodyStrong;
+            text: root.text;
+            visible: !root.icon-only;
+            color: kind == ButtonKind.accent || kind == ButtonKind.danger
+                ? Theme.fg-on-accent
+                : Theme.fg-primary;
+            horizontal-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+
+    accessible-role: button;
+    accessible-label: root.text;
+}

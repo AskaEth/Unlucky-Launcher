@@ -1,0 +1,2 @@
+[12:00:33] [main/ERROR]: coremod failed
+java.lang.IllegalAccessError: tried to access class net.minecraft.client.Minecraft from class com.example.coremod.Hook

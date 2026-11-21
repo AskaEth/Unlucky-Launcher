@@ -1,0 +1,90 @@
+[package]
+name = "unlucky-core"
+description = "Unlucky-Launcher 领域库：纯逻辑，零 UI 依赖（D3 架构纪律）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 零 UI 依赖是硬约束：这里只允许纯逻辑/协议/IO 类依赖（serde/tokio/reqwest 等后续按模块加），
+# 任何时候都不得出现 slint / egui / iced / winit / gtk / javafx —— CI 的 core-no-ui job 守门。
+[dependencies]
+# M15（core::diagnose）预接线：59 条规则正则、规则 YAML 解析、诊断输出序列化。
+# 真正使用方是 crates/core/src/diagnose/ 下的 collectors/engine/hs_err/loader/rules（M15 落地）。
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+
+# M13（core::download）预接线：HTTP / 异步运行时 / 流 / 哈希校验。
+reqwest.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+zip.workspace = true
+# M190（core::update::ed25519）：清单签名验签（官方实现，见 workspace 依赖处的取舍说明）。
+ed25519-dalek.workspace = true
+# M31（core::auth）：离线 UUID = MD5 v3（与 HMCL / 服务端 nameUUIDFromBytes 对拍）。
+md-5.workspace = true
+# M33（core::game::java）预接线：tar.gz 解压（Temurin 的 Linux/macOS 产物）。
+flate2.workspace = true
+tar.workspace = true
+
+# M13 的 8 个下载测试 target（文件由 M13 阶段 B 用真实用例覆盖；脚手架期是占位）。
+# `tests/download/support/mod.rs` 是被各 test include 的公共夹具，不单独注册。
+[[test]]
+name = "backoff"
+path = "tests/download/backoff_test.rs"
+
+[[test]]
+name = "health"
+path = "tests/download/health_test.rs"
+
+[[test]]
+name = "mirrors"
+path = "tests/download/mirrors_test.rs"
+
+[[test]]
+name = "region"
+path = "tests/download/region_test.rs"
+
+[[test]]
+name = "cache"
+path = "tests/download/cache_test.rs"
+
+[[test]]
+name = "chunked"
+path = "tests/download/chunked_test.rs"
+
+[[test]]
+name = "resume"
+path = "tests/download/resume_test.rs"
+
+[[test]]
+name = "engine_mock"
+path = "tests/download/engine_mock_test.rs"
+
+[[test]]
+name = "partfile"
+path = "tests/download/partfile_test.rs"
+
+[lints]
+workspace = true
+
+[features]
+# M169：把「本地更新源」这条测试通道**编进二进制**。**默认关**——官方发布构建不带它，
+# `core::update::job::default_source` 里那条分支根本不存在（编译期事实，不靠运行时判据）。
+# 验收用法见 `crates/cli/tests/update_e2e_test.rs` 的文件头；`packaging/check_test_source_off.py`
+# 守门「发布流水线与打包脚本都不许打开它」。
+update-test-source = []
+
+# M190：把**测试公钥**并进信任表（`trust::TEST_ONLY`）。它只加一把**公开**的钥，**不**开任何数据源
+# 开关（没有环境变量、没有 `DirSource`）。唯一使用者是 `crates/presenter` 的 `[dev-dependencies]`：
+# presenter 的更新链路用例要构造「本构建认得」的签名清单，而它们编译 core 时既没有 `cfg(test)`，
+# 也不该去打开 `update-test-source`（那条同时给出「本地目录当更新源」这条路）。
+# 守门：`packaging/check_test_key_off.py`（只许出现在这里与 presenter 的 dev-dependencies）。
+update-test-key = []

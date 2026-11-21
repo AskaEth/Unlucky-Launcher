@@ -1,0 +1,87 @@
+// Toast：右下角非阻塞提示（下载完成 / 复制成功 / 后台任务结论）。
+// 队列与自动消失时长由 Rust ToastCenter 管理（P0 默认 4s），这里只负责渲染与手动关闭。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiToast, ToastKind } from "../models.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+
+component ToastCard inherits Rectangle {
+    in property <UiToast> data;
+    callback dismissed(string);
+
+    width: 300px;
+    height: body-layout.preferred-height;
+    background: Theme.bg-elevated;
+    border-radius: Metrics.radius-md;
+    border-width: 1px;
+    border-color: Theme.stroke;
+    drop-shadow-blur: 16px;
+    drop-shadow-color: Theme.shadow;
+    drop-shadow-offset-y: 3px;
+
+    // 左侧语义色条：Metro 用色块表达状态，不用图标喧宾夺主
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 3px;
+        height: root.height;
+        background: root.data.kind == ToastKind.success ? Theme.state-success
+            : root.data.kind == ToastKind.warn ? Theme.state-warn
+            : root.data.kind == ToastKind.error ? Theme.state-danger
+            : Theme.accent;
+    }
+
+    body-layout := HorizontalLayout {
+        padding-left: Metrics.gap-3;
+        padding-right: Metrics.gap-2;
+        padding-top: Metrics.gap-2;
+        padding-bottom: Metrics.gap-2;
+        spacing: Metrics.gap-2;
+
+        UiText {
+            role: TextRole.body;
+            text: root.data.text;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
+
+        AppIcon {
+            kind: IconKind.close;
+            icon-size: 14px;
+            tint: Theme.fg-secondary;
+
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.dismissed(root.data.id); }
+            }
+        }
+    }
+}
+
+export component ToastHost inherits Rectangle {
+    in property <[UiToast]> toasts;
+    callback dismissed(string);
+
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    stack-box := Rectangle {
+        x: root.width - stack-box.width - Metrics.gap-4;
+        y: root.height - stack-box.height - Metrics.gap-4;
+        width: 300px;
+        height: stack.preferred-height;
+        background: transparent;
+
+        stack := VerticalLayout {
+            width: stack-box.width;
+            spacing: Metrics.gap-2;
+
+            for t in root.toasts : ToastCard {
+                data: t;
+                dismissed(id) => { root.dismissed(id); }
+            }
+        }
+    }
+}

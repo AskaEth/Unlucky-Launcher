@@ -1,0 +1,283 @@
+// 右侧 AI 常驻栏（D16 §1）：默认 320px 可折叠；可「展开为页面」变成全宽独立页，
+// 两形态共享同一份会话模型（由 Rust 侧 AiSession 持有，这里只渲染，切换不丢状态）。
+// 栏顶承载 YOLO 快捷开关（D4 补充）与端点标签。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiChatMessage, ChatRole } from "../models.slint";
+import { UiText, TextRole } from "label.slint";
+import { AppIcon, IconKind } from "icons.slint";
+import { MetroButton, ButtonKind } from "../widgets/button.slint";
+import { PlainInput } from "../widgets/inputs.slint";
+import { GlassBase } from "glass.slint";
+import { ListView } from "std-widgets.slint";
+
+// 一条会话消息：user 靠右（accent-soft 块）/ assistant 靠左 / tool 用状态边框 / system 居中弱化
+component ChatBubble inherits Rectangle {
+    in property <UiChatMessage> message;
+
+    property <bool> is-tool: message.role == ChatRole.tool;
+    property <bool> is-system: message.role == ChatRole.system;
+    property <length> text-width: root.width - 2 * Metrics.gap-2;
+    property <length> tool-row: is-tool ? 16px : 0px;
+
+    height: text-node.preferred-height + 2 * Metrics.gap-2 + tool-row;
+    background: message.role == ChatRole.user
+            ? Theme.accent-soft
+        : is-tool ? Theme.bg-canvas
+        : is-system ? transparent
+        : Theme.bg-elevated;
+    border-radius: Metrics.radius-md;
+    border-width: is-tool ? 1px : 0px;
+    border-color: message.tool_ok ? Theme.state-success : Theme.state-danger;
+
+    // 工具调用可视化（D4 要求：工具执行在会话里可见）
+    if is-tool : AppIcon {
+        x: Metrics.gap-2;
+        y: Metrics.gap-2 + 1px;
+        icon-size: 12px;
+        kind: message.tool_ok ? IconKind.check : IconKind.error;
+        tint: message.tool_ok ? Theme.state-success : Theme.state-danger;
+    }
+    if is-tool : UiText {
+        x: Metrics.gap-2 + 16px;
+        y: Metrics.gap-2;
+        width: text-width - 16px;
+        height: 14px;
+        role: TextRole.caption;
+        text: "工具 · " + message.tool_name;
+        color: message.tool_ok ? Theme.state-success : Theme.state-danger;
+    }
+
+    text-node := UiText {
+        x: Metrics.gap-2;
+        y: Metrics.gap-2 + tool-row;
+        width: text-width;
+        height: text-node.preferred-height;
+        role: TextRole.body;
+        text: message.text;
+        wrap: word-wrap;
+        overflow: elide;
+        vertical-alignment: top;
+        horizontal-alignment: message.role == ChatRole.user ? right : left;
+        color: is-system ? Theme.fg-secondary : Theme.fg-primary;
+    }
+
+    // 流式未收敛：末尾的 accent 光标块
+    if message.streaming : Rectangle {
+        x: 0;
+        y: root.height - 10px;
+        width: 8px;
+        height: 10px;
+        background: Theme.accent;
+    }
+}
+
+export component AiPanel inherits Rectangle {
+    in property <[UiChatMessage]> messages;
+    in-out property <bool> collapsed: false;
+    /// true = 停在右侧栏形态；false = 已拆成独立全宽页
+    in property <bool> docked: true;
+    in property <bool> yolo: false;
+    in property <bool> streaming: false;
+    in property <string> endpoint-label: "llama.cpp · 本地";
+    in-out property <string> draft: "";
+
+    callback toggle-collapsed();
+    callback expand();
+    callback dock();
+    callback toggle-yolo();
+    callback send(string);
+    callback stop();
+
+    // 栏形态用 min/max 钉死宽度（布局里等价于固定宽度），页形态交给父容器铺满
+    min-width: docked ? (collapsed ? Metrics.ai-rail-width : Metrics.ai-panel-width) : 0px;
+    max-width: docked ? (collapsed ? Metrics.ai-rail-width : Metrics.ai-panel-width) : 100000px;
+    horizontal-stretch: docked ? 0 : 1;
+    height: 100%;
+    background: Theme.bg-surface;
+
+    // 玻璃拟态底（D17 高级特性；关闭态不画东西）——排在内容之前，压在最底层
+    GlassBase { card-radius: 0px; }
+
+    // 左边界线
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 1px;
+        height: root.height;
+        background: Theme.stroke;
+    }
+
+    // ── 折叠态：icon 轨 ─────────────────────────────────────────
+    if docked && collapsed : VerticalLayout {
+        x: 1px;
+        width: root.width - 1px;
+        height: root.height;
+        padding-top: Metrics.gap-2;
+        padding-bottom: Metrics.gap-2;
+        spacing: Metrics.gap-2;
+
+        AppIcon {
+            kind: IconKind.ai;
+            icon-size: 18px;
+            tint: Theme.accent;
+
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.toggle-collapsed(); }
+            }
+        }
+
+        AppIcon {
+            kind: IconKind.expand;
+            icon-size: 14px;
+            tint: Theme.fg-secondary;
+
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.expand(); }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; background: transparent; }
+
+        // YOLO 指示点：开启时实心 accent
+        Rectangle {
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: root.yolo ? Theme.accent : Theme.stroke-strong;
+        }
+    }
+
+    // ── 展开态：栏内 / 独立页共用 ────────────────────────────────
+    if !(docked && collapsed) : VerticalLayout {
+        x: 1px;
+        width: root.width - 1px;
+        height: root.height;
+
+        // 头部
+        Rectangle {
+            height: 52px;
+            background: transparent;
+
+            HorizontalLayout {
+                padding-left: Metrics.gap-3;
+                padding-right: Metrics.gap-2;
+                spacing: Metrics.gap-2;
+
+                AppIcon { kind: IconKind.ai; icon-size: 16px; tint: Theme.accent; }
+
+                VerticalLayout {
+                    spacing: 0px;
+                    vertical-stretch: 1;
+
+                    UiText {
+                        role: TextRole.bodyStrong;
+                        text: "AI 助手";
+                        horizontal-stretch: 1;
+                    }
+                    UiText {
+                        role: TextRole.caption;
+                        text: root.endpoint-label;
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                MetroButton {
+                    kind: root.yolo ? ButtonKind.accent : ButtonKind.subtle;
+                    text: "YOLO";
+                    button-height: 24px;
+                    clicked => { root.toggle-yolo(); }
+                }
+
+                if root.docked : MetroButton {
+                    kind: ButtonKind.subtle;
+                    icon: IconKind.expand;
+                    icon-only: true;
+                    button-height: 24px;
+                    clicked => { root.expand(); }
+                }
+                if !root.docked : MetroButton {
+                    kind: ButtonKind.subtle;
+                    icon: IconKind.sidebar;
+                    icon-only: true;
+                    button-height: 24px;
+                    clicked => { root.dock(); }
+                }
+                if root.docked : MetroButton {
+                    kind: ButtonKind.subtle;
+                    icon: IconKind.chevronRight;
+                    icon-only: true;
+                    button-height: 24px;
+                    clicked => { root.toggle-collapsed(); }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.stroke; }
+
+        // 对话流（ListView 行虚拟化，research/01 已确认）
+        ListView {
+            vertical-stretch: 1;
+
+            for m in root.messages : ChatBubble {
+                message: m;
+                width: root.width - 2 * Metrics.gap-3;
+            }
+        }
+
+        if root.messages.length == 0 : UiText {
+            role: TextRole.caption;
+            text: "问点什么：装哪个版本、崩溃怎么修、帮我改设置…";
+            horizontal-alignment: center;
+            height: 40px;
+        }
+
+        Rectangle { height: 1px; background: Theme.stroke; }
+
+        // 输入区
+        Rectangle {
+            height: 56px;
+            background: transparent;
+
+            HorizontalLayout {
+                padding: Metrics.gap-2;
+                spacing: Metrics.gap-2;
+
+                input-box := Rectangle {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    background: Theme.bg-input;
+                    border-radius: Metrics.radius-sm;
+                    border-width: 1px;
+                    border-color: input-field.focused ? Theme.accent : Theme.stroke;
+
+                    input-field := PlainInput {
+                        text-padding: Metrics.gap-2;
+                        placeholder: "输入消息，Enter 发送";
+                        text <=> root.draft;
+                        accepted(t) => {
+                            if (t != "") {
+                                root.send(t);
+                            }
+                        }
+                    }
+                }
+
+                MetroButton {
+                    kind: ButtonKind.accent;
+                    icon: root.streaming ? IconKind.stop : IconKind.send;
+                    icon-only: true;
+                    clicked => {
+                        if (root.streaming) {
+                            root.stop();
+                        } else if (root.draft != "") {
+                            root.send(root.draft);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

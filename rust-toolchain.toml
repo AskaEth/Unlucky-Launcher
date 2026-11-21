@@ -1,0 +1,31 @@
+[toolchain]
+# M391（GAPS §2.9 E6 / 债务台账 P69）：把**判据**钉在具体小版本上，不再跟着 `stable` 漂。
+#
+# 为什么钉：`channel = "stable"` 意味着判据会自己变。P69 就是这么红的 —— clippy 1.100.0 有一支
+# `needless_bool` 变体在 1.99.1 上**根本不存在**（同一段代码 1.99.1 exit 0、1.100.0 报错），而容器
+# 每次 `--rm` 重跑都会重新下载「当时最新的 stable」。机制与四格受控实验见
+# `DevDocs/00-债务台账-p7.md` 的 P69 一节（「真凶是容器每次重新下载最新 stable」）。
+#
+# 为什么是 1.99.1，不是 1.100.0：
+#   - 1.99.1 = 本机 `rustc --version` 的实际值（`58cf8f9c3 2026-10-13`）。本 mission 的三条门禁
+#     （fmt / check / clippy）就是在这份编译器上跑绿后交付的 ⇒ 钉它 = 钉住一份**已被验证过**的判据，
+#     且本机无需重新下载（`rustup toolchain install 1.99.1` 已装，rustc 提交号与 stable 逐字相同）。
+#   - 1.100.0 是 2026-11-09 之后的上游 stable（容器 2026-11-12 那次拿到的就是它）。它多带几支新 lint
+#     （例如 cargo 的 `unused_workspace_dependencies`：实测 1.99.1 根本不发这条告警），而本机从没在
+#     1.100.0 上跑过全量门禁 ⇒ 钉它等于把判据换成一份**本机未验证过**的。要换就单独开一轮换，别在
+#     清账 mission 里顺手升，否则「清账」和「升级」两件事的因果关系再也分不开。
+#
+# 升级步骤（一次一件事，别只改这一行）：改这里的 channel → `cargo fmt --all --check` →
+# `cargo check --workspace --all-targets -j 2` → `cargo clippy --workspace --all-targets -- -D warnings`。
+# 三条都绿再提交；新 lint 变红说明这一轮升级本身就是它要修的东西，别把红留给下一轮。
+#
+# ⚠ 覆盖面（明写，别当成「全仓已钉死」）：本文件管**本机**和**读本文件的 harness**（例如 tower 的
+# Docker 容器 —— P69 的漂移就发生在那里）。`.github/workflows/` 里那些 `dtolnay/rust-toolchain@stable`
+# 是**另一套**解析（作业内显式装 stable），是否覆盖本文件未实测（本机 github.com 不可达）。所以
+# `dev-guards.yml` 另加了一步「钉的版本 vs 实际 rustc」对账，漂了会打 `::warning::` 点名两个版本。
+#
+# 各平台（Win10+ / macOS / Linux）共用本文件，不按平台另起工具链。
+# `targets` 刻意不钉：交叉目标（如 aarch64-pc-windows-msvc）由需要它的人自己 `rustup target add`。
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,27 @@
+// 徽标：MC 版本 / 加载器 / 已装 / 远古版 等短标记。Metro 做法是细边框小方块，不用药丸圆角。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiText, TextRole } from "../components/label.slint";
+
+export component Badge inherits Rectangle {
+    in property <string> text: "";
+    in property <color> tint: Theme.fg-secondary;
+    in property <color> fill: transparent;
+
+    height: 18px;
+    width: label.preferred-width + 2 * Metrics.gap-1 + 2px;
+    background: fill;
+    border-width: 1px;
+    border-color: tint;
+    border-radius: Metrics.radius-sm;
+
+    label := UiText {
+        role: TextRole.caption;
+        text: root.text;
+        color: root.tint;
+        font-size: 11px;
+        horizontal-alignment: center;
+        x: Metrics.gap-1 + 1px;
+        width: label.preferred-width;
+    }
+}

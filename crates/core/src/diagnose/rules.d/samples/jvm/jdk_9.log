@@ -1,0 +1,2 @@
+[12:00:05] [main/ERROR]: Failed to launch
+java.lang.ClassCastException: java.base/jdk.internal.loader.ClassLoaders$AppClassLoader cannot be cast to java.net.URLClassLoader

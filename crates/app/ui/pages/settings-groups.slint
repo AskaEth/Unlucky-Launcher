@@ -1,0 +1,117 @@
+// 设置页右栏的「schema 分组」渲染器：下载 / Java / 数据 / AI / MCP 五组。
+//
+// 行来自 Rust 侧的 `SettingGroupView`（core::setting schema 的键），这里只按控件类型画：
+// 开关 → toggle；分段 → segmented；文本 → text；只读 → 纯文案；动作 → 按钮。
+// 写回一律 `PageState.setting-changed(key, value)` / `setting-action(action)`，
+// 由 host 走 `SettingStore::set`（同源 launcher.json）。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiSettingGroup, UiSettingRow, SettingControl } from "../models.slint";
+import { PageState } from "../page_state.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { SettingItem, SettingGroup, ControlKind } from "../widgets/setting-item.slint";
+
+component RowView inherits Rectangle {
+    in property <UiSettingRow> item;
+    /// 文本编辑的本地缓冲（编辑中不回写模型，失焦/回车才提交）
+    in-out property <string> draft;
+
+    height: root.item.control == SettingControl.readonly ? 48px
+        : root.item.description == "" ? 44px : 58px;
+    background: transparent;
+
+    init => { self.draft = root.item.value_text; }
+    changed item => { self.draft = root.item.value_text; }
+
+    if root.item.control == SettingControl.toggle : SettingItem {
+        label: root.item.label;
+        description: root.item.description;
+        kind: ControlKind.toggle;
+        checked: root.item.flag;
+        toggled(v) => { PageState.setting-changed(root.item.key, v ? "true" : "false"); }
+    }
+
+    if root.item.control == SettingControl.choice : SettingItem {
+        label: root.item.label;
+        description: root.item.description;
+        kind: ControlKind.segmented;
+        options: root.item.options;
+        selected: root.item.selected;
+        changed(i) => {
+            if (i >= 0 && i < root.item.options.length) {
+                PageState.setting-changed(root.item.key, root.item.options[i]);
+            }
+        }
+    }
+
+    if root.item.control == SettingControl.text : SettingItem {
+        label: root.item.label;
+        description: root.item.description;
+        kind: ControlKind.text;
+        value: root.draft;
+        edited(t) => {
+            root.draft = t;
+            PageState.setting-changed(root.item.key, t);
+        }
+    }
+
+    if root.item.control == SettingControl.action : SettingItem {
+        label: root.item.label;
+        description: root.item.description;
+        kind: ControlKind.button;
+        button-text: "执行";
+        clicked => { PageState.setting-action(root.item.action); }
+    }
+
+    if root.item.control == SettingControl.readonly : HorizontalLayout {
+        padding-left: Metrics.gap-4;
+        padding-right: Metrics.gap-4;
+        spacing: Metrics.gap-3;
+
+        UiText {
+            role: TextRole.body;
+            text: root.item.label;
+            width: 200px;
+        }
+        UiText {
+            role: TextRole.caption;
+            text: root.item.description;
+            horizontal-stretch: 1;
+            wrap: word-wrap;
+        }
+    }
+}
+
+export component SettingsGroups inherits Rectangle {
+    in property <string> tab: "";
+
+    background: transparent;
+
+    VerticalLayout {
+        padding-bottom: Metrics.gap-5;
+
+        if PageState.setting-groups.length == 0 : Rectangle {
+            height: 120px;
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                UiText {
+                    role: TextRole.caption;
+                    text: "设置还没加载出来（host 未就绪或数据根不可写）";
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        for group in PageState.setting-groups : Rectangle {
+            visible: group.id == root.tab;
+            height: group.rows.length * 58px + 40px;
+            background: transparent;
+
+            VerticalLayout {
+                SettingGroup { title: group.title; }
+                for setting-row in group.rows : RowView { item: setting-row; }
+            }
+        }
+    }
+}

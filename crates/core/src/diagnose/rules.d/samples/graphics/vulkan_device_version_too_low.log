@@ -1,0 +1,5 @@
+[12:00:21] [Render thread/INFO]: Using graphics backend VULKAN, using drivers: Intel proprietary driver
+[12:00:21] [Render thread/ERROR]: Backend failure reason: vulkan_device_version_too_low
+[12:00:21] [Render thread/ERROR]: Backend failure message: Device NVIDIA GeForce GT 710 reports Vulkan 1.0.0, at least 1.2 required
+[12:00:21] [Render thread/ERROR]: Failed to create backend VULKAN
+[12:00:21] [Render thread/INFO]: Falling back to OpenGL

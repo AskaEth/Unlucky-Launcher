@@ -1,0 +1,1 @@
+[12:01:03] [main/ERROR]: org.spongepowered.asm.mixin.injection.throwables.InvalidInjectionException: Critical injection failure: @Inject annotation could not find target method

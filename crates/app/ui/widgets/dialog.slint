@@ -1,0 +1,122 @@
+// 对话框宿主：HMCL 队列语义（一次只显示一条，来源排序由 Rust DialogQueue 决定）+ Metro 化外观。
+// 类型：确认 / 输入 / 进度 / 错误（含诊断入口）。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiDialog, DialogKind } from "../models.slint";
+import { UiText, TextRole } from "../components/label.slint";
+import { AppIcon, IconKind } from "../components/icons.slint";
+import { MetroButton, ButtonKind } from "button.slint";
+import { TextField } from "inputs.slint";
+
+export component DialogHost inherits Rectangle {
+    in property <UiDialog> current;
+    in property <bool> open: false;
+    /// 队列中剩余条数（>0 时卡片底部提示「还有 N 条待处理」，语义上是队列而非堆叠）
+    in property <int> queued: 0;
+    in-out property <string> input-text: "";
+    callback primary();
+    callback secondary();
+    callback dismissed();
+
+    width: 100%;
+    height: 100%;
+    background: Theme.scrim;
+    visible: open;
+
+    // 吞掉遮罩上的点击，避免误触下层页面
+    TouchArea {
+        clicked => { root.dismissed(); }
+    }
+
+    card := Rectangle {
+        x: (root.width - card.width) / 2;
+        y: (root.height - card.height) / 2;
+        width: 440px;
+        height: content.preferred-height;
+        background: Theme.bg-elevated;
+        border-radius: Metrics.radius-lg;
+        border-width: 1px;
+        border-color: Theme.stroke;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 6px;
+
+        content := VerticalLayout {
+            padding: Metrics.gap-5;
+            spacing: Metrics.gap-3;
+
+            HorizontalLayout {
+                spacing: Metrics.gap-2;
+
+                if root.current.kind == DialogKind.error : AppIcon {
+                    kind: IconKind.error;
+                    icon-size: 20px;
+                    tint: Theme.state-danger;
+                }
+                if root.current.kind == DialogKind.confirm : AppIcon {
+                    kind: IconKind.warn;
+                    icon-size: 20px;
+                    tint: Theme.state-warn;
+                }
+                UiText {
+                    role: TextRole.title;
+                    text: root.current.title;
+                    horizontal-stretch: 1;
+                }
+            }
+
+            body-text := UiText {
+                role: TextRole.body;
+                text: root.current.body;
+                wrap: word-wrap;
+                overflow: elide;
+                color: Theme.fg-secondary;
+                vertical-alignment: top;
+                height: body-text.preferred-height;
+            }
+
+            if root.current.kind == DialogKind.input : TextField {
+                placeholder: root.current.input_label;
+                text <=> root.input-text;
+            }
+
+            if root.current.kind == DialogKind.progress : track := Rectangle {
+                height: 6px;
+                border-radius: 3px;
+                background: Theme.bg-pressed;
+
+                Rectangle {
+                    width: track.width * Math.min(Math.max(root.current.progress, 0), 1);
+                    height: track.height;
+                    border-radius: 3px;
+                    background: Theme.accent;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Metrics.gap-2;
+                alignment: end;
+                padding-top: Metrics.gap-2;
+
+                UiText {
+                    role: TextRole.caption;
+                    text: root.queued > 0 ? "还有 " + root.queued + " 条待处理" : "";
+                    horizontal-stretch: 1;
+                    horizontal-alignment: left;
+                }
+
+                if root.current.secondary != "" : MetroButton {
+                    kind: ButtonKind.subtle;
+                    text: root.current.secondary;
+                    clicked => { root.secondary(); }
+                }
+                MetroButton {
+                    kind: root.current.kind == DialogKind.error ? ButtonKind.danger : ButtonKind.accent;
+                    text: root.current.primary;
+                    enabled: root.current.kind != DialogKind.progress;
+                    clicked => { root.primary(); }
+                }
+            }
+        }
+    }
+}

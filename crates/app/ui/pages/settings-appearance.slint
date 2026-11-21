@@ -1,0 +1,146 @@
+// 设置页「外观」分组（09 §2 G6 + §113 D17 定案）：主题三态 + 「外观（高级）」P1 四件。
+//
+// 从 pages/settings.slint 拆出来只为守住 400 行门槛；控件语义与设置键一一对应：
+// theme-mode → appearance.theme_mode / bg-* → appearance.bg_image* / panel-alpha →
+// appearance.panel_alpha / glass → appearance.glass / accent-color → appearance.accent_color。
+// 09 §111 硬约束：高级特性全部默认关闭，开启背景图时这里会给出对比度提示（warn 行）。
+import { Theme } from "../theme/tokens.slint";
+import { ThemeMode, BgFillKind } from "../models.slint";
+import { SettingItem, SettingGroup, ControlKind } from "../widgets/setting-item.slint";
+
+export component AppearanceSection inherits VerticalLayout {
+    in-out property <ThemeMode> theme-mode: ThemeMode.auto;
+    in-out property <bool> bg-image-enabled: false;
+    in-out property <string> bg-image: "";
+    in-out property <BgFillKind> bg-fill: BgFillKind.cover;
+    in-out property <float> bg-dim: 0.35;
+    in-out property <float> panel-alpha: 1.0;
+    in-out property <bool> glass: false;
+    in-out property <string> accent-color: "";
+    in property <bool> accent-invalid: false;
+
+    callback theme-changed(ThemeMode);
+    callback bg-image-enabled-changed(bool);
+    callback bg-image-changed(string);
+    callback bg-fill-changed(BgFillKind);
+    callback bg-dim-changed(float);
+    callback panel-alpha-changed(float);
+    callback glass-changed(bool);
+    callback accent-color-changed(string);
+    callback accent-swatch-picked(int);
+
+// ── 外观（D17：主题三态 + 09 §101-104 高级四件）──────
+SettingGroup { title: "主题"; }
+SettingItem {
+    label: "主题模式";
+    description: "跟随系统（Auto，随 OS 热切）/ 浅色 / 深色";
+    kind: ControlKind.segmented;
+    options: ["跟随系统", "浅色", "深色"];
+    selected: root.theme-mode == ThemeMode.auto ? 0
+        : root.theme-mode == ThemeMode.light ? 1 : 2;
+    changed(i) => {
+        root.theme-mode = i == 0 ? ThemeMode.auto
+            : i == 1 ? ThemeMode.light : ThemeMode.dark;
+        root.theme-changed(root.theme-mode);
+    }
+}
+
+SettingGroup {
+    title: "高级特性（出厂全部关闭，开启后请确认前景可读）";
+}
+// ① 自定义窗口背景图（09 §101）
+SettingItem {
+    label: "自定义窗口背景图";
+    description: "PNG 图片铺满窗口；开启后所有面板半透明处都会透出它";
+    kind: ControlKind.toggle;
+    checked: root.bg-image-enabled;
+    toggled(v) => {
+        root.bg-image-enabled = v;
+        root.bg-image-enabled-changed(v);
+    }
+}
+SettingItem {
+    label: "背景图路径";
+    description: root.bg-image == "" ? "尚未选择（绝对路径，例：D:/wall/p.png）" : root.bg-image;
+    kind: ControlKind.text;
+    button-text: "D:/wall/p.png";
+    value <=> root.bg-image;
+    edited(t) => { root.bg-image-changed(t); }
+}
+SettingItem {
+    label: "填充模式";
+    description: "铺满（裁切）/ 完整（留底色）/ 平铺";
+    kind: ControlKind.segmented;
+    options: ["铺满", "完整", "平铺"];
+    selected: root.bg-fill == BgFillKind.cover ? 0
+        : root.bg-fill == BgFillKind.contain ? 1 : 2;
+    changed(i) => {
+        root.bg-fill = i == 0 ? BgFillKind.cover
+            : i == 1 ? BgFillKind.contain : BgFillKind.tile;
+        root.bg-fill-changed(root.bg-fill);
+    }
+}
+SettingItem {
+    label: "暗化层强度";
+    // 09 §111：开启背景图时自动给对比度提示——暗化太低 + 面板太透会伤可读性
+    description: (root.bg-image-enabled && (root.bg-dim < 0.25 || root.panel-alpha < 0.8))
+        ? "⚠ 对比度偏低：建议暗化 ≥ 25% 或面板不透明度 ≥ 80%"
+        : "越大背景越暗、前景越清晰（0% = 不压暗）";
+    warn: root.bg-image-enabled && (root.bg-dim < 0.25 || root.panel-alpha < 0.8);
+    kind: ControlKind.slider;
+    min-value: 0.0;
+    max-value: 0.9;
+    slider-value: root.bg-dim;
+    slid(v) => {
+        root.bg-dim = v;
+        root.bg-dim-changed(v);
+    }
+}
+// ② 全局面板半透明度（09 §102）
+SettingItem {
+    label: "全局面板半透明度";
+    description: "卡片 / 导航 / AI 栏统一透明度（100% = 出厂 Metro 纯色）";
+    kind: ControlKind.slider;
+    min-value: 0.4;
+    max-value: 1.0;
+    slider-value: root.panel-alpha;
+    slid(v) => {
+        root.panel-alpha = v;
+        root.panel-alpha-changed(v);
+    }
+}
+// ③ 玻璃拟态卡片（09 §103）
+SettingItem {
+    label: "玻璃拟态卡片";
+    description: "卡片底铺背景图的预生成模糊层（需先开启背景图）";
+    kind: ControlKind.toggle;
+    checked: root.glass;
+    toggled(v) => {
+        root.glass = v;
+        root.glass-changed(v);
+    }
+}
+// ④ 自定义强调色（09 §104）
+SettingItem {
+    label: "预设强调色";
+    description: root.accent-color == "" ? "当前：出厂 Metro 蓝" : "当前：" + root.accent-color;
+    kind: ControlKind.swatches;
+    swatch-colors: [
+        #0078D4, #0F6CBD, #107C10, #9D5D00,
+        #C42B1C, #8764B8, #C239B3, #00B7C3,
+    ];
+    swatch-current: root.accent-color == "" ? #0078D4 : Theme.accent;
+    swatch-picked(i) => { root.accent-swatch-picked(i); }
+}
+SettingItem {
+    label: "强调色（十六进制）";
+    description: root.accent-invalid
+        ? "⚠ 需要 #RRGGBB 形式，留空恢复出厂蓝"
+        : "留空 = 出厂 #0078D4；影响顶线 / 选中态 / 按钮 / 徽标";
+    warn: root.accent-invalid;
+    kind: ControlKind.text;
+    button-text: "#0078D4";
+    value <=> root.accent-color;
+    edited(t) => { root.accent-color-changed(t); }
+}
+}

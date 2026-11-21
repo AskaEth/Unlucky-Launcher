@@ -1,0 +1,1 @@
+[12:00:22] [main/ERROR]: java.lang.IllegalStateException: GLFW error before init: [0x10008]Cocoa: Failed to find service port for display

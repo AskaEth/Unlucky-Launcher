@@ -1,0 +1,7 @@
+{
+  "data": [
+    { "id": 7 },
+    { "id": 8, "name": "Only A Name" },
+    { "id": 9, "slug": "only-a-slug", "latestFilesIndexes": [{ "fileId": 1 }], "logo": { "url": "" } }
+  ]
+}

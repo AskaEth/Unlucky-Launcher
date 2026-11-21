@@ -1,0 +1,3 @@
+[12:00:31] [main/ERROR]: Failed to start
+java.lang.NoSuchMethodError: net.minecraft.world.World.getBlockState(Lnet/minecraft/core/BlockPos;)Lnet/minecraft/world/level/block/state/BlockState;
+	at com.example.mod.Foo.bar(Foo.java:42)

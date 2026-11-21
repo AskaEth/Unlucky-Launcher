@@ -1,0 +1,34 @@
+{
+  "data": [
+    {
+      "id": 4455667,
+      "modId": 238222,
+      "displayName": "jei-1.20.1-forge-15.2.0.27",
+      "fileName": "jei-1.20.1-forge-15.2.0.27.jar",
+      "releaseType": 1,
+      "fileDate": "2024-05-01T12:00:00Z",
+      "fileLength": 1234567,
+      "downloadCount": 987654,
+      "downloadUrl": "https://edge.forgecdn.net/files/4455/667/jei-1.20.1-forge-15.2.0.27.jar",
+      "hashes": [
+        { "value": "9F0C6B5A1D2E3F405162738495A6B7C8D9E0F102", "algo": 1 },
+        { "value": "0A1B2C3D4E5F60718293A4B5C6D7E8F9", "algo": 2 },
+        { "value": "ffeeddccbbaa99887766554433221100ffeeddcc", "algo": 99 }
+      ],
+      "gameVersions": ["1.20.1", "1.20.2", "Forge", "Client", "Server"]
+    },
+    {
+      "id": 4455668,
+      "modId": 238222,
+      "displayName": "",
+      "fileName": "jei-1.21.1-neoforge-19.0.0.1.jar",
+      "releaseType": 2,
+      "fileDate": "2024-09-10T12:00:00Z",
+      "fileLength": 1300000,
+      "downloadUrl": null,
+      "hashes": [],
+      "gameVersions": ["1.21.1", "NeoForge"]
+    }
+  ],
+  "pagination": { "index": 0, "pageSize": 50, "resultCount": 2, "totalCount": 2 }
+}

@@ -1,0 +1,126 @@
+// 自绘无边框标题栏（D16 §1）：Metro 一体感 + accent 顶线。
+// 拖拽/最大化/最小化/关闭只发回调，原生窗口操作由 main.rs 接到 Slint Window 平台上
+// （Slint DSL 内无法移动原生窗口）。
+import { Theme } from "../theme/tokens.slint";
+import { Metrics } from "../theme/metrics.slint";
+import { UiText, TextRole } from "label.slint";
+import { AppIcon, IconKind } from "icons.slint";
+
+component WindowButton inherits Rectangle {
+    in property <IconKind> icon: IconKind.minimize;
+    /// 关闭键：hover 用 Metro 红底白字
+    in property <bool> danger: false;
+    callback clicked();
+
+    width: Metrics.titlebar-button-width;
+    height: Metrics.titlebar-height;
+    background: touch.pressed
+        ? (danger ? Theme.state-danger-hover : Theme.bg-pressed)
+        : touch.has-hover ? (danger ? Theme.state-danger : Theme.bg-hover) : transparent;
+    animate background { duration: Theme.motion-fast; }
+
+    AppIcon {
+        kind: root.icon;
+        icon-size: 12px;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        tint: root.danger && touch.has-hover ? Theme.fg-on-accent : Theme.fg-primary;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component TitleBar inherits Rectangle {
+    in property <string> title: "Unlucky Launcher";
+    in property <string> subtitle: "";
+    in property <bool> maximized: false;
+
+    callback toggle-maximize();
+    callback minimize();
+    callback request-close();
+
+    height: Metrics.titlebar-height;
+    background: Theme.bg-titlebar;
+
+    // accent 顶线（Metro 强调色贯穿）
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: Metrics.accent-line;
+        background: Theme.accent;
+    }
+
+    // 拖拽区：交给原生 `WindowMoveArea`（Slint 1.18 内置，拖过阈值才移动窗口，
+    // 并保持子元素可交互）。只覆盖左侧，右侧三个窗口按钮留出来。
+    // 平台不支持「系统级窗口移动」时该元素退化为无操作（Qt/部分 Wayland 组合），
+    // winit on Windows/macOS/X11 可用——Win7 落在这条路上。
+    WindowMoveArea {
+        x: 0;
+        y: Metrics.accent-line;
+        width: root.width - 3 * Metrics.titlebar-button-width;
+        height: root.height - Metrics.accent-line;
+    }
+
+    // 应用标记 + 标题
+    HorizontalLayout {
+        x: Metrics.gap-3;
+        y: Metrics.accent-line;
+        width: root.width - 3 * Metrics.titlebar-button-width - 2 * Metrics.gap-3;
+        height: root.height - Metrics.accent-line;
+        spacing: Metrics.gap-2;
+
+        Rectangle {
+            width: 14px;
+            height: 14px;
+            border-radius: Metrics.radius-sm;
+            background: Theme.accent;
+            UiText {
+                text: "U";
+                font-size: 10px;
+                font-weight: 700;
+                color: Theme.fg-on-accent;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        UiText {
+            role: TextRole.caption;
+            text: root.title;
+            font-weight: 600;
+            horizontal-stretch: 1;
+        }
+
+        UiText {
+            role: TextRole.caption;
+            text: root.subtitle;
+            color: Theme.fg-secondary;
+        }
+    }
+
+    HorizontalLayout {
+        x: root.width - 3 * Metrics.titlebar-button-width;
+        y: Metrics.accent-line;
+        width: 3 * Metrics.titlebar-button-width;
+        height: root.height - Metrics.accent-line;
+        spacing: 0px;
+
+        WindowButton {
+            icon: IconKind.minimize;
+            clicked => { root.minimize(); }
+        }
+        WindowButton {
+            icon: root.maximized ? IconKind.restore : IconKind.maximize;
+            clicked => { root.toggle-maximize(); }
+        }
+        WindowButton {
+            icon: IconKind.close;
+            danger: true;
+            clicked => { root.request-close(); }
+        }
+    }
+}

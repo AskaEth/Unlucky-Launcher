@@ -1,0 +1,39 @@
+# 规则库 · 内存（2 条）
+# 移植自 HMCL CrashReportAnalyzer.Rule 的内存组（analyse/02 §7.3 第 2 组）。
+version: 1
+category: memory
+rules:
+  - id: memory.out_of_memory
+    severity: critical
+    # 最后一条是跨行组合（"Error occurred during initialization of VM" + "Too small maximum heap"），
+    # 因此整条规则用 file scope；HMCL 的 \R 在 Rust regex 里写成 (?:\r\n|\n|\r)。
+    scope: file
+    pattern: '(java\.lang\.OutOfMemoryError|The system is out of physical RAM or swap space|Out of Memory Error|Error occurred during initialization of VM(?:\r\n|\n|\r)Too small maximum heap)'
+    confidence: 0.9
+    priority: 80
+    cause:
+      key: diagnose.cause.memory.out_of_memory
+      summary: '游戏内存不足（OutOfMemoryError）：-Xmx 太小，或装的 mod 太多/整合包太大'
+      detail: '把 -Xmx 调到物理内存的一半左右（一般 4096–8192 MB），装光影/大量 mod 时适度加大'
+    fix_action:
+      - kind: adjust_memory
+        min_xmx_mb: 2048
+        note: '优先加大 -Xmx；若已经是 32 位 Java，先换 64 位'
+    sample: samples/memory/out_of_memory.log
+    source: 'HMCL CrashReportAnalyzer.Rule.OUT_OF_MEMORY'
+
+  - id: memory.memory_exceeded
+    severity: critical
+    pattern: 'There is insufficient memory for the Java Runtime Environment to continue'
+    confidence: 0.88
+    priority: 82
+    cause:
+      key: diagnose.cause.memory.memory_exceeded
+      summary: '系统物理内存/交换区耗尽：JVM 连续分配失败，整机内存不够'
+      detail: '关掉占内存的程序、降低 -Xmx，或扩大系统虚拟内存（页面文件）'
+    fix_action:
+      - kind: adjust_memory
+        increase_system_swap: true
+        note: '整机内存不足，不只是 -Xmx 的问题'
+    sample: samples/memory/memory_exceeded.log
+    source: 'HMCL CrashReportAnalyzer.Rule.MEMORY_EXCEEDED'
